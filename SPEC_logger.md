@@ -49,10 +49,18 @@ from pathlib import Path
 from config import LOG_FILE, LOG_LEVEL
 
 # ── JSON formatter ──────────────────────────────────────────────────────────
+
+# Instance attributes every LogRecord carries. A key on a record that is NOT in here
+# arrived via a `log.info(..., extra={...})` call. Build it from a real record — NOT
+# from `logging.LogRecord.__dict__`, which is the *class* dict (methods only) and would
+# let every built-in field (funcName, lineno, process, …) leak into every line.
+_RESERVED_KEYS = set(
+    logging.LogRecord("", 0, "", 0, "", (), None).__dict__
+) | {"message", "asctime"}
+
+
 class JsonFormatter(logging.Formatter):
     """Emit one JSON object per line for structured log parsing."""
-
-    ALWAYS_FIELDS = ("levelname", "name", "message")
 
     def format(self, record: logging.LogRecord) -> str:
         payload = {
@@ -63,12 +71,13 @@ class JsonFormatter(logging.Formatter):
         }
         # Attach any extra= kwargs passed at call site
         for key, value in record.__dict__.items():
-            if key not in logging.LogRecord.__dict__ and key not in self.ALWAYS_FIELDS:
+            if key not in _RESERVED_KEYS:
                 payload[key] = value
         # Attach exception info if present
         if record.exc_info:
+            exc_type = record.exc_info[0]
             payload["exception"] = {
-                "type":       record.exc_info[0].__name__,
+                "type":       exc_type.__name__ if exc_type else None,
                 "message":    str(record.exc_info[1]),
                 "traceback":  traceback.format_exception(*record.exc_info),
             }
@@ -83,6 +92,10 @@ HUMAN_DATEFMT = "%Y-%m-%d %H:%M:%S"
 # ── Root setup (called once at process start) ────────────────────────────────
 def configure_logging() -> None:
     """Call once at application entry point (app.py, monthly_job.py, CLI)."""
+    # Fail-safe: a broken handler (disk full, closed stream) must never surface as an
+    # exception in the pipeline. The stdlib swallows handler errors when this is False.
+    logging.raiseExceptions = False
+
     root = logging.getLogger("knowledge_repo")
     root.setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))
 

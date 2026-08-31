@@ -60,7 +60,7 @@ M1.1 ─► M1.2 ─┬─► M1.3 ─► M1.4 ─► M1.5 ─► M1.6 ─► M1
     it returns `None`. `phase2_configured()` is `False` then `True` across those.
   - Files: `config.py`, `tests/test_config.py`.
 
-- [ ] **M1.4 — `logger.py`**
+- [x] **M1.4 — `logger.py`**
   - Acceptance: matches `SPEC_logger.md` — `JsonFormatter` (one JSON object per line,
     `ts`/`level`/`logger`/`msg` + any `extra=` keys + an `exception` block when
     `exc_info`), `HUMAN_FMT` stderr handler, `configure_logging()` idempotent (second
@@ -159,6 +159,11 @@ important ones back into SPEC.md.
 - **M1.3** — `phase2_configured()` is implemented as `try require_phase2_config() except
   ConfigError: return False` — one source of truth for "is Phase 2 usable", instead of a
   parallel list of checks that could drift.
+- **M1.4** — `SPEC_logger.md`'s `JsonFormatter` used `key not in logging.LogRecord.__dict__`
+  to spot `extra=` keys — that is the *class* dict (methods only), so every built-in field
+  (`funcName`, `lineno`, `process`, …) would leak into every JSON line. Fixed in both the
+  code and the spec: build `_RESERVED_KEYS` from a real `LogRecord` instance. Also added
+  `logging.raiseExceptions = False` in `configure_logging()` for the documented fail-safe.
 - **M1.6 (pending)** — `SPEC_vector_store.md` lists `DISTANCE_METRIC`, `ON_DISK_PAYLOAD`,
   `HNSW_M`, `HNSW_EF_CONSTRUCT` in its config block, but they are **not** in SPEC.md §
   Shared config and `DISTANCE_METRIC = Distance.COSINE` would force `config.py` to import
