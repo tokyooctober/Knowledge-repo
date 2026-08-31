@@ -169,7 +169,7 @@ M2.3b chunker ─────┴────────────────
   - Files: `ingestion/md_loader.py`, `tests/ingestion/test_md_loader.py`,
     `tests/fixtures/corpus/**`.
 
-- [ ] **M2.3 — `ingestion/chunker.py`**
+- [x] **M2.3 — `ingestion/chunker.py`**
   - Acceptance: `chunk_article(article, image_transcriptions=None)` per
     `SPEC_chunker.md` — body chunks via `RecursiveCharacterTextSplitter` (512/64,
     `tiktoken` length), one chunk per table (never split), one per non-skipped
