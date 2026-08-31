@@ -279,9 +279,121 @@ Milestone 2 is done when SPEC.md § *Success Criteria* "Phase 1" holds.
 
 ## Milestone 3 — Phase 2 (email-triggered scrape)
 
-Build steps 13–17: `email_reader.py` → `login.py` → `crawler.py` → `extractor.py` →
-`monthly_job.py` email mode. Strictly additive; do not start until Milestone 2's
-Success Criteria hold.
+Build steps 13–17. Strictly additive — nothing in Phase 1 changes. Browser tests use
+`playwright.async_api` against a **local `http.server` in a thread** serving fixture
+pages; the "human signs in" is simulated by flipping the fixture server's auth flag after
+N polls. No live site, no real mailbox, ever.
+
+```
+M3.1 extractor ──┐
+M3.2 email_reader ┤
+                 ├─► M3.5 monthly_job (email mode) ─► M3.6 gate
+M3.3 login ──► M3.4 crawler ─┘
+```
+`extractor` and `email_reader` are independent (config/logger/models only) — parallel
+with `login`. `crawler` needs `login`. `monthly_job` email mode needs all four.
+
+> `pytest-playwright` is installed but not used — its fixtures are sync; our code is
+> async. Fixtures build `async_playwright()` directly. Chromium is installed
+> (`playwright install chromium`); CI must run that step.
+
+- [ ] **M3.1 — `ingestion/extractor.py`**
+  - Acceptance: `extract(raw_page) -> Article | None` per `SPEC_extractor.md` — `None` for
+    `status_code != 200`; body via `trafilatura` with a BeautifulSoup fallback; HTML
+    tables → Markdown (`pandas.read_html`, hand-rolled fallback) prefixed with index +
+    caption, removed from body; layout tables (no `<th>`, single col) skipped; `<img>` →
+    `ImageRef(local_path=None, is_paywall = host endswith SITE_DOMAIN)`, `urljoin` for
+    relative, data URIs skipped; `models.content_hash` / `models.canonical_url` (shared
+    helpers); `source="web"`, `source_path=None`; stub below `MIN_WORD_COUNT`.
+  - Verify: `tests/ingestion/test_extractor.py` with saved `.html` fixtures — every §
+    Testing Notes bullet **plus the markdown↔HTML parity test deferred from M2.2**: the
+    same article as a corpus `.md` and as HTML produce an `Article` with the same field
+    set, so the downstream pipeline cannot tell them apart.
+  - Files: `ingestion/extractor.py`, `tests/ingestion/test_extractor.py`,
+    `tests/fixtures/html/**`.
+
+- [ ] **M3.2 — `inbox/email_reader.py`**
+  - Acceptance: `read_update_email() -> EmailUpdate | None` and `mark_processed(uid)` per
+    `SPEC_email_reader.md` — Gmail API (primary) / IMAP (fallback) behind `EMAIL_BACKEND`;
+    `UNSEEN` + `FROM == TRUSTED_SENDER` + subject server-substring then client-regex;
+    anchor-phrase URL extraction (same-line regex → next-5-lines → HTML `<a href>`);
+    `SITE_DOMAIN` **dot-boundary** validation (`== SITE_DOMAIN or endswith "." + SITE_DOMAIN`);
+    `https://` required; **does not mark processed** — that is a separate call the
+    scheduler makes only after a clean ingest. `SenderMismatchError` /
+    `NoLinksFoundError` / `InvalidDomainError` / `MailboxConnectionError` /
+    `MailboxAuthError` / `AuthRefreshError` defined here. `require_phase2_config()` on entry.
+  - Verify: `tests/inbox/test_email_reader.py` with `.eml` fixtures + a mocked Gmail
+    service / `imaplib` — the assertion list in § Testing Notes: valid plain-text and HTML
+    emails extract the same URL, `no_anchor` / `members_only` raise `NoLinksFoundError`,
+    `wrong_domain` raises `InvalidDomainError`, `notexample.com` fails the dot-boundary,
+    sender mismatch raises, `None` when no `UNSEEN` match, credentials never logged.
+  - Files: `inbox/email_reader.py`, `tests/inbox/test_email_reader.py`,
+    `tests/fixtures/*.eml`.
+
+- [ ] **M3.3 — `scraper/login.py`**
+  - Acceptance: `get_authenticated_context()` and `ensure_authenticated(page, expected_url)`
+    and `close_browser()` per `SPEC_login.md` — **no credentials anywhere**; `state.json`
+    restore + health-check; `_human_available()` (`INTERACTIVE_LOGIN` + `stdin.isatty`)
+    drives both "may we wait" and `headless = not _human_available()`; login-wall
+    detection (`SUCCESS_SELECTOR` present → ok; absent + form/URL-fragment → wall; absent +
+    no signal → not a wall, return True); `_manual_login` polls `query_selector` (never
+    `input()`, never `wait_for_selector`) and re-navigates to `expected_url` on success;
+    `ensure_authenticated` **never raises** (catches `ManualLoginRequiredError` /
+    `ManualLoginTimeoutError` → `False`); `ManualLoginRequiredError` raised **immediately**
+    when no human, no waiting; teardown closes context → browser → `playwright.stop()`.
+  - Verify: `tests/scraper/test_login.py` with `async_playwright` + a threaded fixture
+    server whose auth flag the test flips — every § Testing Notes bullet, especially:
+    valid `state.json` opens nothing; `INTERACTIVE_LOGIN=never` raises with **no sleep**
+    (assert elapsed ≪ `MANUAL_LOGIN_POLL_MS`); the dead-URL case (no success, no form)
+    returns `True` with no window; the dashboard-landing case navigates back to
+    `expected_url`; a `goto` already redirected to `/login` still recovers the article.
+  - Files: `scraper/login.py`, `tests/scraper/test_login.py`, `tests/scraper/_server.py`
+    (shared fixture server, also used by M3.4).
+
+- [ ] **M3.4 — `scraper/crawler.py`**
+  - Acceptance: `fetch_pages(context, urls, known_urls) -> list[RawPage]` per
+    `SPEC_crawler.md` — session pre-check (`ensure_authenticated(page, HEALTH_CHECK_URL)`
+    → `SessionExpiredError` / `LoginStateError` on failure); dedup; per-URL one
+    `try/finally` with the **only** `page.close()`; `page.goto` with one retry on timeout;
+    `ensure_authenticated(page, url)` after every nav; the step-(c) DOM `SUCCESS_SELECTOR`
+    guard (skip, don't append); **`status_code = 200`** for any page that passes the guard
+    (a pre-login 3xx/4xx does not drop it); `is_new` from `known_urls`; rate-limit sleep;
+    `ValueError` on empty `urls`.
+  - Verify: `tests/scraper/test_crawler.py` (shared fixture server) — no-wall fast path,
+    wall-then-dashboard returns the ARTICLE's HTML at the article URL, nobody-logs-in
+    skips that URL and continues, dead 404 skipped by the guard with no prompt, pre-check
+    failure raises `SessionExpiredError` before the loop, pre-login 403 → `RawPage.status_code
+    == 200`, `ensure_authenticated` always called with the step-(a) URL.
+  - Files: `scraper/crawler.py`, `tests/scraper/test_crawler.py`.
+
+- [ ] **M3.5 — `scheduler/monthly_job.py` email mode**
+  - Acceptance: replace the `NotImplementedError` stubs with `run_email_triggered(dry_run)`
+    and `start_scheduler()` per `SPEC_monthly_job.md` — check email → filter already-indexed
+    (still fetched) → `login.get_authenticated_context()` (catch `ManualLoginRequiredError`
+    → `login_required`, `ManualLoginTimeoutError` → `login_timeout`) → `crawler.fetch_pages`
+    (catch `SessionExpiredError` → `session_error`, `LoginStateError` → `login_state_error`)
+    → `extractor.extract` → shared `ingest_article` **with `context`** → `mark_processed`
+    **only when `stats["failed"] == 0` and not dry-run** → `finally` closes context AND
+    `login.close_browser()` on **every** exit path. CLI: bare invocation starts
+    APScheduler, `--once` runs one check. `--check-email` in `app.py` wired up.
+  - Verify: `tests/scheduler/test_monthly_job_email.py` — all mocked (`email_reader`,
+    `login`, `crawler`, `extractor`, `vector_store`, `metadata_db`): `None` email → no
+    writes; fresh URL → `new == 1`; a failure → `mark_processed` NOT called and the email
+    stays unread; `ManualLoginRequiredError` → `login_required`, returns before the fetch
+    loop; `close_browser()` on the happy path AND the two abort paths; `close_browser()`
+    **never** called in corpus mode.
+  - Files: `scheduler/monthly_job.py`, `tests/scheduler/test_monthly_job_email.py`.
+
+- [ ] **M3.6 — Milestone 3 gate**
+  - Acceptance: `ruff` clean; `pytest` green (browser tests included — CI runs `playwright
+    install chromium` first); coverage ≥ 85 % overall. **SPEC.md § Success Criteria
+    "Phase 2" holds** (proven by tests, since there is no live site): a notification email
+    drives a run that authenticates, scrapes, ingests, marks processed; an interrupted run
+    leaves the email unread and the next poll completes it; a `--once` run with an expired
+    session and no tty fails fast with `ManualLoginRequiredError` and leaks no process;
+    switching every backend to Ollama via `config.py` alone still answers (already true
+    from M2 — re-confirm nothing regressed). Decisions log updated.
+  - Verify: `ruff check . && ruff format --check . && pytest --cov --cov-fail-under=85`.
 
 Milestone 3 is done when SPEC.md § *Success Criteria* "Phase 2" holds.
 

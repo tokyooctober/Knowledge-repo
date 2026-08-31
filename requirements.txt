@@ -49,4 +49,5 @@ numpy>=1.26
 pytest>=8.0
 pytest-asyncio>=0.23
 pytest-cov>=5.0
+pytest-playwright>=0.5      # installed for completeness; async tests use async_playwright directly
 ruff>=0.6
