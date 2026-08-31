@@ -384,18 +384,18 @@ with `login`. `crawler` needs `login`. `monthly_job` email mode needs all four.
     **never** called in corpus mode.
   - Files: `scheduler/monthly_job.py`, `tests/scheduler/test_monthly_job_email.py`.
 
-- [ ] **M3.6 — Milestone 3 gate**
-  - Acceptance: `ruff` clean; `pytest` green (browser tests included — CI runs `playwright
-    install chromium` first); coverage ≥ 85 % overall. **SPEC.md § Success Criteria
-    "Phase 2" holds** (proven by tests, since there is no live site): a notification email
-    drives a run that authenticates, scrapes, ingests, marks processed; an interrupted run
-    leaves the email unread and the next poll completes it; a `--once` run with an expired
-    session and no tty fails fast with `ManualLoginRequiredError` and leaks no process;
-    switching every backend to Ollama via `config.py` alone still answers (already true
-    from M2 — re-confirm nothing regressed). Decisions log updated.
-  - Verify: `ruff check . && ruff format --check . && pytest --cov --cov-fail-under=85`.
+- [x] **M3.6 — Milestone 3 gate** — `ruff` + `ruff format --check` clean, **357 tests
+  green (exit 0)**, **96.8 % total coverage** (`--cov-fail-under=85` satisfied; every
+  module ≥ 92 %, `md_loader` 99 % / `chunker` 100 %). Phase 2 Success Criteria covered by
+  tests: `test_fresh_email_scrapes_and_marks_processed` (authenticate → scrape → ingest →
+  mark); `test_an_article_failure_leaves_the_email_unread` (interrupted run → email
+  stays unread → retry); `test_non_interactive_raises_immediately_without_waiting` +
+  `test_login_required_aborts_before_the_fetch_loop` (`--once` + expired session + no tty
+  → `ManualLoginRequiredError`, fails fast, `close_browser` on the abort path); backend
+  swap is unchanged from M2 (all providers behind `llm_provider`). Browser tests need
+  `playwright install chromium`; `pytest-timeout` guards against hangs.
 
-Milestone 3 is done when SPEC.md § *Success Criteria* "Phase 2" holds.
+Milestone 3 is done — SPEC.md § *Success Criteria* "Phase 2" holds.
 
 ---
 

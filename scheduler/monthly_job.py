@@ -1,9 +1,12 @@
-"""Ingestion orchestrator.
+"""Ingestion orchestrator across two content sources.
 
-**Milestone 2 implements corpus mode only** (Phase 1): load markdown from `MD_CORPUS_DIR`,
-ingest new and changed files, never remove anything (see `run_prune`). Email mode and the
-blocking scheduler raise `NotImplementedError` until Milestone 3 — a corpus sync must run
-on a machine that has never had Playwright or a mailbox.
+Mode 1 — corpus sync (Phase 1): load markdown from `MD_CORPUS_DIR`, ingest new and changed
+files, never remove anything (see `run_prune`). No browser, no mailbox, no credentials.
+
+Mode 2 — email-triggered (Phase 2): `run_email_triggered` checks the mailbox for a new
+report, authenticates against the site (a human signs in when the session expires),
+scrapes the linked article, and ingests it. `start_scheduler` runs it on a cron + interval
+schedule.
 
 The shared sub-pipeline `ingest_article` is the only place vectors are written:
     stub guard -> is_changed -> transcribe -> chunk -> embed
