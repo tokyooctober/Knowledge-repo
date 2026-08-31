@@ -115,14 +115,164 @@ M1.1 ─► M1.2 ─┬─► M1.3 ─► M1.4 ─► M1.5 ─► M1.6 ─► M1
 
 ## Milestone 2 — Phase 1 pipeline (corpus → queryable)
 
-Build steps 5–12. Not broken into tasks yet — do that once Milestone 1 is green, since
-the exact interfaces may shift when real code meets the specs.
+Build steps 5–12. Delivers a system that ingests the markdown corpus and answers cited
+questions against it — **no browser, no mailbox, no site credentials**. Every LLM call is
+mocked in the suite; real providers appear only in the integration checks the operator
+runs.
 
-Rough order (from SPEC.md § *Build order*): `llm_provider.py` (mocked) → `md_loader.py` →
-`chunker.py` → `embedder.py` → `image_transcriber.py` (local-path first) →
-`monthly_job.py` corpus mode → `retriever.py` → `answerer.py` → `app.py`.
+```
+M2.1 llm_provider ─┬─► M2.3 embedder ──┐
+                   ├─► M2.4 image_transcriber (local-path only)
+                   │                    ├─► M2.5 monthly_job (corpus mode)
+M2.2 md_loader ────┤                    │
+M2.3b chunker ─────┴────────────────────┘
+                                        └─► M2.6 retriever ─► M2.7 answerer ─► M2.8 app
+```
+`md_loader` and `chunker` are pure and independent — buildable in parallel with
+`llm_provider`. `mock providers` land in `tests/conftest.py` as part of M2.1.
 
-Independent once `llm_provider` exists: `md_loader`, `chunker` (pure, no services).
+> **Before M2.1**: the installed SDKs are newer majors than the specs' code samples
+> (`anthropic` 1.2, `openai` 3.6, `qdrant-client` 1.19, `sentence-transformers` 6,
+> `langchain-text-splitters` 1.1, `trafilatura` 2.2, `httpx`→`httpx2`). For each module,
+> open the spec, then confirm the exact call against the installed package before writing
+> it. Record any drift in the Decisions log and patch the spec.
+
+- [ ] **M2.1 — `llm_provider.py` + mock providers**
+  - Acceptance: `TextProvider` / `VisionProvider` / `EmbeddingProvider` protocols and the
+    concrete Anthropic + OpenAI-compat + local classes from `SPEC_llm_provider.md`, with
+    the `__init__`s the review added (vision reads `VISION_*`, never `LLM_*`). Factories
+    `get_text_provider` / `get_vision_provider` / `get_embedding_provider` cache a
+    singleton and raise `ConfigError` on an unknown backend, `VisionNotSupportedError`
+    when `supports_vision` is False. `ProviderConnectionError` / `ModelNotFoundError`
+    defined here. `tests/conftest.py` gains `MockTextProvider`, `MockVisionProvider`,
+    `MockEmbeddingProvider` (deterministic vectors from a hash of the text).
+  - Verify: `tests/test_llm_provider.py` — every bullet in `SPEC_llm_provider.md` §
+    Testing Notes, with `anthropic.Anthropic` and `openai.OpenAI` patched; never a real
+    call. Factory returns the right class per backend; singleton is reused; `"openai"` and
+    `"openai_compat"` both map to the OpenAI-compat class; vision `supports_vision` list
+    check works.
+  - Files: `llm_provider.py`, `tests/test_llm_provider.py`, `tests/conftest.py`.
+
+- [ ] **M2.2 — `ingestion/md_loader.py`**
+  - Acceptance: `iter_article_paths`, `load_article`, `load_corpus` per
+    `SPEC_md_loader.md` — frontmatter contract (empty string counts as absent;
+    `author or AUTHOR_NAME`), whole-relative-path image resolution (never basename),
+    dedup by resolved path, caption rejection (URL-as-title, bare-date italic),
+    GFM-table extraction verbatim, `models.content_hash` / `models.canonical_url` (never
+    reimplemented), stub → `Article(is_stub=True)` with a valid hash, unparseable → `None`.
+    `CorpusNotFoundError` / `CorpusEmptyError`.
+  - Verify: `tests/ingestion/test_md_loader.py` against `tests/fixtures/corpus/` — the
+    full fixture list in the spec, **including two articles whose image subfolders each
+    hold a `00-*.jpg` with different bytes** (the basename-resolution regression) and the
+    parity test (same fixture as markdown and as HTML through a stub `extract()` produce
+    the same `Article` field set).
+  - Files: `ingestion/md_loader.py`, `tests/ingestion/test_md_loader.py`,
+    `tests/fixtures/corpus/**`.
+
+- [ ] **M2.3 — `ingestion/chunker.py`**
+  - Acceptance: `chunk_article(article, image_transcriptions=None)` per
+    `SPEC_chunker.md` — body chunks via `RecursiveCharacterTextSplitter` (512/64,
+    `tiktoken` length), one chunk per table (never split), one per non-skipped
+    transcription, `MIN_CHUNK_WORDS` filter, `chunk_id = f"{url_hash}_{type[0]}_{i:04d}"`,
+    `total_chunks` set on all, `[]` for a stub.
+  - Verify: `tests/ingestion/test_chunker.py` — every § Testing Notes bullet: content-type
+    prefixes, oversized-table WARNING-but-kept, `chunk_article(..., None)` yields only
+    body+table, `total_chunks` == sum.
+  - Files: `ingestion/chunker.py`, `tests/ingestion/test_chunker.py`.
+
+- [ ] **M2.4 — `ingestion/embedder.py`**
+  - Acceptance: `embed_chunks(chunks) -> list[EmbeddedChunk]` (batched by `BATCH_SIZE`,
+    `model_name` from the provider), `embed_query(text) -> list[float]` (applies
+    `provider.query_prefix`, truncates over the token limit with a WARNING). No SDK
+    imports — provider via `llm_provider.get_embedding_provider()` only. `[]` in → `[]`
+    out.
+  - Verify: `tests/ingestion/test_embedder.py` with `MockEmbeddingProvider` — output
+    length == input, `model_name` matches, provider called once per batch not per chunk,
+    `embed_query` applies the prefix.
+  - Files: `ingestion/embedder.py`, `tests/ingestion/test_embedder.py`.
+
+- [ ] **M2.5 — `ingestion/image_transcriber.py` (local-path path only)**
+  - Acceptance: `transcribe_images(article, browser_context=None)` and
+    `count_uncached(images)` per `SPEC_image_transcriber.md` — **exactly one
+    `ImageTranscription` per `article.images` entry, in order, never shorter**; branch on
+    `ImageRef.local_path` (set → read from disk, no httpx); `data/image_cache.db`
+    `source_key` cache (`file:path:mtime:size`), cache hit skips the vision call when the
+    recorded `VISION_MODEL` matches; type detection + `TRANSCRIBE_TYPES` gate;
+    `media_type` from the Pillow-normalised file; `MAX_IMAGES_PER_ARTICLE` cap still emits
+    an entry per over-cap image; missing local file → `skipped=True, "unavailable"`.
+    **The Phase-2 download path is stubbed/deferred to M3** — a paywall image with
+    `browser_context=None` returns `skipped=True, "no_browser_context"`.
+  - Verify: `tests/ingestion/test_image_transcriber.py` with `MockVisionProvider` and
+    fixture images (chart PNG, table PNG, photo JPG, tracking-pixel PNG) — `len(result)
+    == len(article.images)` on every path; local read makes zero HTTP calls; cache key
+    changes with file bytes; a cached transcription under a different `VISION_MODEL` is
+    not reused; `count_uncached` touches no API.
+  - Files: `ingestion/image_transcriber.py`, `tests/ingestion/test_image_transcriber.py`,
+    `tests/fixtures/images/**`.
+
+- [ ] **M2.6 — `scheduler/monthly_job.py` (corpus mode only)**
+  - Acceptance: `run_corpus_sync(corpus_dir, dry_run, only, limit, force)`,
+    `ingest_article(article, context=None, stats, run_id, force)`, `run_inspect`,
+    `run_reset(assume_yes)`, `run_prune(dry_run, force)` per `SPEC_monthly_job.md` — the
+    shared sub-pipeline (stub guard → `is_changed` → transcribe → chunk → embed →
+    `delete_by_url` before `upsert` → `metadata_db.upsert_article`), `--only` abort on an
+    unknown stem, `--force` skips `is_changed` but not the stub check, `--reset` order
+    (drop collection → drop rows) and cache-preservation, `--prune` >50% guard,
+    `finish_run` on every exit path incl. `except BaseException`. **No Playwright import,
+    no `BrowserContext`, no email code path** — the email-mode functions are stubbed with
+    a `NotImplementedError("Milestone 3")` and a CLI that rejects `--once` / bare invoke.
+  - Verify: `tests/scheduler/test_monthly_job.py` — the **Corpus mode**, **Prune**,
+    **Selection/force/reset**, and **Both modes** (concurrency guard, crash → finish_run)
+    bullet groups from § Testing Notes, all with `md_loader` / `vector_store` /
+    `metadata_db` / `image_transcriber` mocked. Assert `login` is never imported and
+    `transcribe_images` is called with `context=None`.
+  - Files: `scheduler/monthly_job.py`, `tests/scheduler/test_monthly_job.py`.
+
+- [ ] **M2.7 — `query/retriever.py`**
+  - Acceptance: `retrieve(query, top_k, filters)` per `SPEC_retriever.md` — `embed_query`
+    → `vector_store.search(top_k*2, filters)` → discard `< MIN_SCORE_THRESHOLD` →
+    `MAX_CHUNKS_PER_ARTICLE` cap → trim to `top_k`, sorted by score desc. `ValueError` on
+    empty query, truncate over-long query with a WARNING, `ModelMismatchError` if
+    `vector_store.recorded_model()` ≠ the configured embedding model. Query rewriting /
+    hybrid stay behind their `ENABLE_*` flags (off).
+  - Verify: `tests/query/test_retriever.py` — mock `embed_query` + an in-memory
+    `VectorStore`; assert ordering, threshold exclusion, per-article cap, empty-query
+    raise, and the model-mismatch guard.
+  - Files: `query/retriever.py`, `tests/query/test_retriever.py`.
+
+- [ ] **M2.8 — `query/answerer.py`**
+  - Acceptance: `answer(query, results) -> Answer` per `SPEC_answerer.md` — empty results
+    → graceful "not found" with **no** provider call; cap at `MAX_CONTEXT_CHUNKS` +
+    truncate at `MAX_CHUNK_CHARS`; system + user message shape; `provider.complete`;
+    `[N]` citation parse → `Source` list (explicit field mapping, out-of-range dropped
+    with a WARNING); token counts passed through. No SDK import.
+  - Verify: `tests/query/test_answerer.py` with `MockTextProvider` — `sources` only holds
+    cited & in-range indices; empty results path never calls the provider; the 20→6 cap;
+    `Answer.model` / token counts come from the `TextResponse`.
+  - Files: `query/answerer.py`, `tests/query/test_answerer.py`.
+
+- [ ] **M2.9 — `app.py`**
+  - Acceptance: CLI (`query`, `--top-k`, `--tags`, `--date-after/before`, `--json`,
+    `--sync-corpus`, `--check-email` → "Phase 2 not built", `--stats`, `--dry-run`) and
+    the Streamlit UI per `SPEC_app.md` — `retrieve` → `answer` → render with `[N]`
+    citations and source cards; `local:` ids rendered as plain text; sidebar stats by
+    source; the "Check email" button disabled when `phase2_configured()` is False;
+    background-thread ingestion guarded by `metadata_db.has_open_run()`.
+  - Verify: `tests/test_app.py` — CLI `--stats` and `--json` (valid JSON → `Answer`),
+    unknown `--tags` returns a graceful empty answer, empty-KB message names the corpus
+    path; Streamlit via `streamlit.testing` or mocked `st.*`. One integration test:
+    seeded in-memory Qdrant + `MockTextProvider`, a known question returns the right
+    article as top source.
+  - Files: `app.py`, `tests/test_app.py`.
+
+- [ ] **M2.10 — Milestone 2 gate**
+  - Acceptance: `ruff` clean; `pytest` green; coverage ≥ 85 % overall, ≥ 95 % for
+    `md_loader.py` and `chunker.py`. **SPEC.md § Success Criteria "Phase 1" holds**: a
+    `--corpus --dry-run` over a fixture corpus is clean; a second `--corpus` run is all
+    skips with zero `vector_store.upsert`; `app.py "<question>"` cites the right article;
+    the suite passes with no Playwright / mailbox / credentials. Decisions log updated.
+  - Verify: `ruff check . && ruff format --check . && pytest --cov --cov-fail-under=85`.
+  - Files: none (gate only).
 
 Milestone 2 is done when SPEC.md § *Success Criteria* "Phase 1" holds.
 
