@@ -251,7 +251,7 @@ M2.3b chunker ─────┴────────────────
     `Answer.model` / token counts come from the `TextResponse`.
   - Files: `query/answerer.py`, `tests/query/test_answerer.py`.
 
-- [ ] **M2.9 — `app.py`**
+- [x] **M2.9 — `app.py`**
   - Acceptance: CLI (`query`, `--top-k`, `--tags`, `--date-after/before`, `--json`,
     `--sync-corpus`, `--check-email` → "Phase 2 not built", `--stats`, `--dry-run`) and
     the Streamlit UI per `SPEC_app.md` — `retrieve` → `answer` → render with `[N]`
@@ -265,14 +265,13 @@ M2.3b chunker ─────┴────────────────
     article as top source.
   - Files: `app.py`, `tests/test_app.py`.
 
-- [ ] **M2.10 — Milestone 2 gate**
-  - Acceptance: `ruff` clean; `pytest` green; coverage ≥ 85 % overall, ≥ 95 % for
-    `md_loader.py` and `chunker.py`. **SPEC.md § Success Criteria "Phase 1" holds**: a
-    `--corpus --dry-run` over a fixture corpus is clean; a second `--corpus` run is all
-    skips with zero `vector_store.upsert`; `app.py "<question>"` cites the right article;
-    the suite passes with no Playwright / mailbox / credentials. Decisions log updated.
-  - Verify: `ruff check . && ruff format --check . && pytest --cov --cov-fail-under=85`.
-  - Files: none (gate only).
+- [x] **M2.10 — Milestone 2 gate** — `ruff` + `ruff format --check` clean, **271 tests
+  green, 98.9% total coverage** (`md_loader` 99%, `chunker` 100% — both above the 95%
+  bar). Success Criteria "Phase 1" covered by tests: `--corpus --dry-run` writes nothing
+  (`test_dry_run_writes_nothing`); second `--corpus` is all skips with zero `upsert`
+  (`test_new_corpus_is_ingested_then_a_second_run_is_all_skips`); the CLI cites the right
+  article from a seeded index (`test_cli_integration_seeded_index`); the whole suite runs
+  with no Playwright / mailbox / credentials / `.env`.
 
 Milestone 2 is done when SPEC.md § *Success Criteria* "Phase 1" holds.
 
@@ -293,6 +292,11 @@ Milestone 3 is done when SPEC.md § *Success Criteria* "Phase 2" holds.
 Things the specs left ambiguous that were decided during implementation. Fold the
 important ones back into SPEC.md.
 
+- **M2.9** — `app.py` runs the CLI from `main()`; the Streamlit UI (`_streamlit_app`) is
+  guarded by `streamlit.runtime.exists()` and left `# pragma: no cover` — it is exercised
+  by `streamlit run app.py`, not the unit suite (per SPEC_app.md testing notes). `--json`
+  uses `dataclasses.asdict` + an ISO datetime encoder. `--check-email` prints "Milestone
+  3" and exits 2. `local:` source ids render as plain text with a "fix frontmatter" note.
 - **M2.6** — the spec's `ingest_article(article, context, stats, run_id, force=False)`
   assumes module-global `metadata_db` / `vector_store`. The implementation instead takes
   `*, db, store` (dependency injection) — `run_corpus_sync` opens one `MetadataDB` and one
