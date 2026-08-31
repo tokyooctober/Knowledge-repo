@@ -103,9 +103,19 @@ while `chunker.py` and `retriever.py` both assumed it — that gap is closed her
 ---
 
 ## Qdrant Collection Configuration
+
+`COLLECTION_NAME`, `EMBEDDING_DIM`, `QDRANT_HOST`, `QDRANT_PORT`, `QDRANT_IN_MEMORY` and
+`UPSERT_BATCH_SIZE` come from `config.py`. The four index-tuning values below are
+**module-level constants in `vector_store.py`, not `config.py`** — `DISTANCE_METRIC` is a
+`qdrant_client` enum and putting it in `config` would drag that dependency into every
+module's `import config`, and none of the four is a knob a user should turn.
+
 ```python
+# config.py
 COLLECTION_NAME   = "knowledge_repo"
 EMBEDDING_DIM     = 1024                    # must match embedder
+
+# vector_store.py (module constants)
 DISTANCE_METRIC   = Distance.COSINE         # cosine for normalised vectors
 ON_DISK_PAYLOAD   = True                    # persist payload to disk
 HNSW_M            = 16                      # HNSW graph connectivity
@@ -120,21 +130,30 @@ HNSW_EF_CONSTRUCT = 100                     # build-time accuracy
 
 ### Collection initialisation
 ```
-On startup, check if collection exists.
+On __init__, check if collection exists.
 If not: create with COSINE distance, EMBEDDING_DIM, HNSW config.
-Store model_name in collection metadata (custom payload field on a sentinel point).
-If collection exists: verify model_name matches configured model; raise if mismatch.
+If it exists: compare its vector size to EMBEDDING_DIM; raise ModelMismatchError on a
+             mismatch (a changed embedding model is a drop-and-reindex, not a live edit).
 ```
+
+The embedding **model name** is not known at `__init__` — it arrives on the
+`EmbeddedChunk`s. So it is recorded lazily: the first `upsert` writes it onto a sentinel
+point (Qdrant has no first-class collection metadata), and every later `upsert` compares
+`embedded_chunks[0].model_name` against it and raises `ModelMismatchError` on a mismatch.
+`recorded_model() -> str | None` exposes it so `query/retriever.py` can guard query-time
+embedding against the same value. The sentinel is filtered out of `count()` and `search()`.
 
 ### Collection drop (`--reset` only)
 ```
 client.delete_collection(COLLECTION_NAME)
 then re-run collection initialisation, so the object is usable afterwards.
 ```
-Drops every point and the collection itself, then recreates it empty with the configured
-model recorded again. Recreating is part of the operation, not a separate step: a
-half-reset that leaves no collection turns the next run's first `upsert` into an obscure
-Qdrant 404 instead of a clean first-run creation.
+Drops every point and the collection itself, then recreates it empty. The recorded model
+name goes with it (the sentinel is dropped), so the next `upsert` records whatever model
+it is given — this is what makes a drop the sanctioned way past a `ModelMismatchError`.
+Recreating is part of the operation, not a separate step: a half-reset that leaves no
+collection turns the next run's first `upsert` into an obscure Qdrant 404 instead of a
+clean first-run creation.
 
 This is the only method that removes points it was not given a URL for. It exists solely
 for `monthly_job.py --reset` and must never be called from an ingestion path — a "clear
@@ -218,9 +237,11 @@ class VectorStore:
 
     def drop_collection(self) -> None: ...   # --reset only; drops and recreates empty
 
-    def count(self) -> int: ...     # total points in collection
+    def recorded_model(self) -> str | None: ...  # model that built the collection, or None
 
-    def stats(self) -> dict: ...    # collection info dict from Qdrant
+    def count(self) -> int: ...     # real points (the model sentinel is excluded)
+
+    def stats(self) -> dict: ...    # {collection_name, points, model_name, dim, status}
 ```
 
 ---

@@ -86,7 +86,7 @@ M1.1 ─► M1.2 ─┬─► M1.3 ─► M1.4 ─► M1.5 ─► M1.6 ─► M1
     loss) and "no method hard-deletes an article row".
   - Files: `storage/metadata_db.py`, `storage/__init__.py`, `tests/storage/test_metadata_db.py`.
 
-- [ ] **M1.6 — `storage/vector_store.py`**
+- [x] **M1.6 — `storage/vector_store.py`**
   - Acceptance: `VectorStore` per `SPEC_vector_store.md` — collection init with COSINE /
     `EMBEDDING_DIM` / HNSW config, `model_name` recorded on a sentinel and checked on
     reconnect (`ModelMismatchError` on mismatch), `chunk_id`→UUID5 point ids, batched
@@ -101,7 +101,9 @@ M1.1 ─► M1.2 ─┬─► M1.3 ─► M1.4 ─► M1.5 ─► M1.6 ─► M1
     a *different* model does not raise.
   - Files: `storage/vector_store.py`, `tests/storage/test_vector_store.py`.
 
-- [ ] **M1.7 — Milestone 1 gate**
+- [x] **M1.7 — Milestone 1 gate** — `ruff check` + `ruff format --check` clean, 99 tests
+  green, coverage 99.8% overall (models & metadata_db 100%, vector_store 99%). Decisions
+  fed back into the specs below.
   - Acceptance: `ruff check .` and `ruff format --check .` clean. `pytest` green.
     Coverage: `models.py` and `storage/metadata_db.py` ≥ 95 %; the milestone's modules
     ≥ 85 % overall. A one-paragraph note in the PR / commit on anything the specs left
@@ -174,9 +176,16 @@ important ones back into SPEC.md.
   (`funcName`, `lineno`, `process`, …) would leak into every JSON line. Fixed in both the
   code and the spec: build `_RESERVED_KEYS` from a real `LogRecord` instance. Also added
   `logging.raiseExceptions = False` in `configure_logging()` for the documented fail-safe.
-- **M1.6 (pending)** — `SPEC_vector_store.md` lists `DISTANCE_METRIC`, `ON_DISK_PAYLOAD`,
-  `HNSW_M`, `HNSW_EF_CONSTRUCT` in its config block, but they are **not** in SPEC.md §
-  Shared config and `DISTANCE_METRIC = Distance.COSINE` would force `config.py` to import
-  `qdrant_client` (which every module then pays for). Decision: keep these four as
-  module-level constants in `vector_store.py`; fix `SPEC_vector_store.md` to say so.
+- **M1.6** — `DISTANCE_METRIC` / `ON_DISK_PAYLOAD` / `HNSW_M` / `HNSW_EF_CONSTRUCT` are now
+  module constants in `vector_store.py`, not `config.py` (`DISTANCE_METRIC` is a
+  `qdrant_client` enum; `config` must stay import-light). `SPEC_vector_store.md` updated.
+- **M1.6** — qdrant-client **1.19** dropped `client.search()`; the module uses
+  `client.query_points(...).points`. The embedding model name isn't known at `__init__`
+  (it rides on `EmbeddedChunk`), so it is recorded lazily on the first `upsert` onto a
+  sentinel point and checked on every later `upsert`; `recorded_model()` exposes it for
+  the retriever. `__init__` only guards the vector **dimension**. Sentinel is filtered out
+  of `count()` and `search()`. `SPEC_vector_store.md` Core Logic + Public Interface updated.
+- **M1.6** — date filters use `models.DatetimeRange` (payload stores `published_at` as an
+  ISO-8601 string); `SearchResult.published_at` is parsed back with
+  `datetime.fromisoformat`.
 
