@@ -72,7 +72,7 @@ M1.1 ─► M1.2 ─┬─► M1.3 ─► M1.4 ─► M1.5 ─► M1.6 ─► M1
     fails internally does not propagate.
   - Files: `logger.py`, `tests/test_logger.py`.
 
-- [ ] **M1.5 — `storage/metadata_db.py`**
+- [x] **M1.5 — `storage/metadata_db.py`**
   - Acceptance: `articles` + `ingestion_runs` schema from `SPEC_metadata_db.md` exactly
     (incl. `pipeline_version`, `source`, `source_path`, `status`, the `idx_articles_source`
     index). WAL mode; the lock-retry (3× / 500 ms); the `ALTER TABLE` migration path.
@@ -159,6 +159,16 @@ important ones back into SPEC.md.
 - **M1.3** — `phase2_configured()` is implemented as `try require_phase2_config() except
   ConfigError: return False` — one source of truth for "is Phase 2 usable", instead of a
   parallel list of checks that could drift.
+- **M1.1** — the full `requirements.txt` install succeeded (exit 0). The resolver pulled
+  much newer majors than the specs assume (`openai` 3.x, `anthropic` 1.x, `pandas` 3.x,
+  `langchain` 1.x, `httpx` → `httpx2`). No impact on Milestone 1 (stdlib + `sqlite3` +
+  `python-dotenv` only), but **`SPEC_llm_provider.md` / `SPEC_extractor.md` code samples
+  must be re-checked against the installed SDK versions at the start of Milestone 2.**
+- **M1.5** — `MetadataDB` holds one `sqlite3` connection (`check_same_thread=False`, WAL).
+  `touch_source_path` is in the spec's Core Operations but was missing from its Public
+  Interface block — implemented, and it's the method `monthly_job` already calls. The
+  `_execute` lock-retry only retries on an error whose message contains "locked"; any
+  other `OperationalError` (bad SQL, missing table) raises immediately.
 - **M1.4** — `SPEC_logger.md`'s `JsonFormatter` used `key not in logging.LogRecord.__dict__`
   to spot `extra=` keys — that is the *class* dict (methods only), so every built-in field
   (`funcName`, `lineno`, `process`, …) would leak into every JSON line. Fixed in both the
