@@ -180,7 +180,7 @@ M2.3b chunker ─────┴────────────────
     body+table, `total_chunks` == sum.
   - Files: `ingestion/chunker.py`, `tests/ingestion/test_chunker.py`.
 
-- [ ] **M2.4 — `ingestion/embedder.py`**
+- [x] **M2.4 — `ingestion/embedder.py`**
   - Acceptance: `embed_chunks(chunks) -> list[EmbeddedChunk]` (batched by `BATCH_SIZE`,
     `model_name` from the provider), `embed_query(text) -> list[float]` (applies
     `provider.query_prefix`, truncates over the token limit with a WARNING). No SDK
