@@ -153,7 +153,7 @@ M2.3b chunker ─────┴────────────────
     check works.
   - Files: `llm_provider.py`, `tests/test_llm_provider.py`, `tests/conftest.py`.
 
-- [ ] **M2.2 — `ingestion/md_loader.py`**
+- [x] **M2.2 — `ingestion/md_loader.py`**
   - Acceptance: `iter_article_paths`, `load_article`, `load_corpus` per
     `SPEC_md_loader.md` — frontmatter contract (empty string counts as absent;
     `author or AUTHOR_NAME`), whole-relative-path image resolution (never basename),
@@ -293,6 +293,12 @@ Milestone 3 is done when SPEC.md § *Success Criteria* "Phase 2" holds.
 Things the specs left ambiguous that were decided during implementation. Fold the
 important ones back into SPEC.md.
 
+- **M2.2** — the fixture corpus is built in `tmp_path` by a `write_article()` helper
+  (real image bytes, no binaries in git) rather than checked in under
+  `tests/fixtures/corpus/`. The spec's **markdown↔HTML parity test** needs
+  `extractor.extract()` and is deferred to M3, where the extractor lands. `_looks_like_date`
+  rejects a caption only when the *whole* string parses as a date and is ≤ 30 chars, so a
+  long descriptive caption starting with a month name is still kept.
 - **M2.1** — installed SDK majors (`anthropic` 1.2, `openai` 3.6) still expose the calls
   the spec's code uses (`messages.create(system=…)`, `chat.completions.create`,
   `.usage.*`), so the provider code is unchanged from the spec. Additions: each provider
