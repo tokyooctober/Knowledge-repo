@@ -113,9 +113,21 @@ def test_local_id_source_is_rendered_as_plain_text(stub_query, capsys):
 # ── CLI: other modes ───────────────────────────────────────────────────────
 
 
-def test_check_email_says_not_built(capsys):
-    assert app.main(["--check-email"]) == 2
-    assert "Milestone 3" in capsys.readouterr().err
+def test_check_email_needs_phase2_configured(monkeypatch, capsys):
+    monkeypatch.setattr("config.phase2_configured", lambda: False)
+    assert app.main(["--check-email"]) == 0
+    assert "Phase 2 is not configured" in capsys.readouterr().err
+
+
+def test_check_email_runs_when_configured(monkeypatch, capsys):
+    monkeypatch.setattr("config.phase2_configured", lambda: True)
+
+    async def fake_run(dry_run=False):
+        return {"new": 1, "updated": 0, "skipped": 0, "failed": 0}
+
+    monkeypatch.setattr("scheduler.monthly_job.run_email_triggered", fake_run)
+    assert app.main(["--check-email"]) == 0
+    assert "'new': 1" in capsys.readouterr().out
 
 
 def test_stats_mode(monkeypatch, capsys):

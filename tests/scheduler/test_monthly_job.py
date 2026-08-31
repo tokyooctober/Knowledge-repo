@@ -389,19 +389,23 @@ async def test_open_run_blocks_a_new_corpus_sync(env):
     assert stats == {"new": 0, "updated": 0, "skipped": 0, "failed": 0}
 
 
-# ── milestone-3 stubs ──────────────────────────────────────────────────────
+# ── CLI ────────────────────────────────────────────────────────────────────
+# (email mode itself is covered by test_monthly_job_email.py)
 
 
-async def test_email_mode_is_not_implemented_yet():
-    with pytest.raises(NotImplementedError, match="Milestone 3"):
-        await mj.run_email_triggered()
-    with pytest.raises(NotImplementedError, match="Milestone 3"):
-        mj.start_scheduler()
+def test_cli_bare_invocation_starts_the_email_scheduler(monkeypatch):
+    started = {"n": 0}
+    monkeypatch.setattr(mj, "start_scheduler", lambda: started.__setitem__("n", started["n"] + 1))
+    assert mj.main([]) == 0
+    assert started["n"] == 1
 
 
-def test_cli_bare_invocation_points_at_corpus(capsys):
-    assert mj.main([]) == 2
-    assert "Milestone 3" in capsys.readouterr().err
+def test_cli_once_runs_a_single_email_check(monkeypatch):
+    async def fake(dry_run=False):
+        return {"new": 1, "updated": 0, "skipped": 0, "failed": 0}
+
+    monkeypatch.setattr(mj, "run_email_triggered", fake)
+    assert mj.main(["--once"]) == 0
 
 
 def test_cli_stats_runs(env, capsys):

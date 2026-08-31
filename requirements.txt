@@ -50,4 +50,5 @@ pytest>=8.0
 pytest-asyncio>=0.23
 pytest-cov>=5.0
 pytest-playwright>=0.5      # installed for completeness; async tests use async_playwright directly
+pytest-timeout>=2.3        # a hung browser/scheduler test fails instead of blocking CI
 ruff>=0.6

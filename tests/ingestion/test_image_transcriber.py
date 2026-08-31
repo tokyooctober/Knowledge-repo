@@ -273,3 +273,102 @@ async def test_transcription_prompt_without_alt_or_caption(tmp_path, vision):
     )
     result = await it.transcribe_images(_article([ref]))
     assert not result[0].skipped  # no alt/caption lines, still transcribes fine
+
+
+# ── Phase-2 download path ──────────────────────────────────────────────────
+
+
+class _FakeCtx:
+    def __init__(self, cookies=None):
+        self._cookies = cookies or [{"name": "sess", "value": "abc"}]
+        self.new_page_calls = 0
+
+    async def cookies(self):
+        return self._cookies
+
+
+def _install_httpx(monkeypatch, *, status=200, content_type="image/png", body=None):
+    body = body if body is not None else _png()
+    seen = {}
+
+    class _Resp:
+        status_code = status
+        headers = {"content-type": content_type}
+        content = body
+
+    class _Client:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            seen["url"] = url
+            return _Resp()
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    return seen
+
+
+async def test_paywall_image_downloads_with_session_cookies(monkeypatch, vision):
+    seen = _install_httpx(monkeypatch)
+    ref = ImageRef(
+        src="https://site.example/chart.png",
+        local_path=None,
+        alt="c",
+        caption="",
+        position=0,
+        is_paywall=True,
+    )
+    result = await it.transcribe_images(_article([ref]), browser_context=_FakeCtx())
+    assert not result[0].skipped
+    assert seen["cookies"] == {"sess": "abc"}  # cookies injected
+    assert seen["url"] == "https://site.example/chart.png"
+
+
+async def test_non_paywall_image_downloads_without_cookies(monkeypatch, vision):
+    seen = _install_httpx(monkeypatch)
+    ref = ImageRef(
+        src="https://cdn.other.com/c.png",
+        local_path=None,
+        alt="",
+        caption="",
+        position=0,
+        is_paywall=False,
+    )
+    await it.transcribe_images(_article([ref]), browser_context=_FakeCtx())
+    assert seen["cookies"] == {}  # external CDN — no auth
+
+
+async def test_download_non_image_content_type_is_skipped(monkeypatch, vision):
+    _install_httpx(monkeypatch, content_type="text/html", body=b"<html>login</html>")
+    ref = ImageRef(
+        src="https://site.example/c.png",
+        local_path=None,
+        alt="",
+        caption="",
+        position=0,
+        is_paywall=True,
+    )
+    result = await it.transcribe_images(_article([ref]), browser_context=_FakeCtx())
+    assert result[0].skipped and result[0].skip_reason == "no_browser_context"  # unavailable path
+
+
+async def test_download_404_is_skipped(monkeypatch, vision):
+    _install_httpx(monkeypatch, status=404)
+    ref = ImageRef(
+        src="https://site.example/gone.png",
+        local_path=None,
+        alt="",
+        caption="",
+        position=0,
+        is_paywall=False,
+    )
+    result = await it.transcribe_images(_article([ref]), browser_context=_FakeCtx())
+    assert result[0].skipped

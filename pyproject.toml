@@ -41,8 +41,9 @@ known-first-party = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-q"
+addopts = "-q --timeout=120 --timeout-method=thread"
 filterwarnings = ["error::DeprecationWarning"]
+markers = ["browser: uses real headless Chromium (slower)"]
 
 # ── Coverage (SPEC.md § Testing Strategy: 85% overall, 95% for the pure core) ──
 [tool.coverage.run]

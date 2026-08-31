@@ -377,15 +377,181 @@ def run_inspect(target: str) -> dict:
         db.close()
 
 
-# ── Milestone 3 stubs ──────────────────────────────────────────────────────
+# ── email-triggered run (Mode 2) ───────────────────────────────────────────
+
+_MAILBOX_ERRORS = ("MailboxConnectionError", "MailboxAuthError", "AuthRefreshError")
+_EMAIL_DATA_ERRORS = ("SenderMismatchError", "NoLinksFoundError", "InvalidDomainError")
 
 
 async def run_email_triggered(dry_run: bool = False) -> dict:
-    raise NotImplementedError("Email-triggered ingestion lands in Milestone 3")
+    """Check the mailbox for a new-report email; scrape and ingest the article if found.
+
+    Returns all-zero stats and writes nothing if there is no new email. Marks the email
+    processed only after a clean ingest — a failed run leaves it unread for the next poll.
+    """
+    from inbox import email_reader
+    from ingestion.extractor import extract
+    from scraper import crawler, login
+
+    db = MetadataDB()
+    if (open_id := db.has_open_run()) is not None:
+        log.warning("Concurrent run detected — aborting", extra={"existing_run_id": open_id})
+        db.close()
+        return _stats()
+
+    run_id = db.start_run("email")
+    stats = _stats()
+    context = None
+    store: VectorStore | None = None
+    started = time.monotonic()
+    try:
+        try:
+            email_update = email_reader.read_update_email()
+        except Exception as exc:
+            name = type(exc).__name__
+            code = (
+                "mailbox_unreachable"
+                if name in _MAILBOX_ERRORS
+                else "email_unparseable"
+                if name in _EMAIL_DATA_ERRORS
+                else None
+            )
+            if code is None:
+                raise
+            log.critical(
+                "Email check failed", extra={"run_id": run_id, "error_type": name}, exc_info=True
+            )
+            db.finish_run(run_id, stats, error=code)
+            return stats
+
+        if email_update is None:
+            log.info("No new report email — run skipped", extra={"run_id": run_id})
+            db.finish_run(run_id, stats)
+            return stats
+
+        log.info(
+            "Email trigger received",
+            extra={
+                "run_id": run_id,
+                "email_uid": email_update.email_uid,
+                "subject": email_update.subject,
+                "link_count": len(email_update.article_links),
+            },
+        )
+        urls = [link.url for link in email_update.article_links]
+        known_urls = db.get_known_urls()
+
+        try:
+            context = await login.get_authenticated_context()
+        except login.ManualLoginRequiredError:
+            log.critical(
+                "Login required but run is not interactive — run an ingestion from a "
+                "terminal once to refresh the session",
+                extra={"run_id": run_id},
+                exc_info=True,
+            )
+            db.finish_run(run_id, stats, error="login_required")
+            return stats
+        except login.ManualLoginTimeoutError:
+            log.error(
+                "Manual login was not completed in time", extra={"run_id": run_id}, exc_info=True
+            )
+            db.finish_run(run_id, stats, error="login_timeout")
+            return stats
+        log.info("Website authentication confirmed", extra={"run_id": run_id})
+
+        try:
+            raw_pages = await crawler.fetch_pages(context, urls, known_urls)
+        except crawler.SessionExpiredError:
+            log.critical(
+                "Pre-check login was not completed", extra={"run_id": run_id}, exc_info=True
+            )
+            db.finish_run(run_id, stats, error="session_error")
+            return stats
+        except login.LoginStateError:
+            log.critical(
+                "Unexpected site state during pre-check", extra={"run_id": run_id}, exc_info=True
+            )
+            db.finish_run(run_id, stats, error="login_state_error")
+            return stats
+
+        if not dry_run:
+            store = VectorStore()
+        for raw_page in raw_pages:
+            try:
+                article = extract(raw_page)
+                if dry_run:
+                    log.info(
+                        "DRY RUN — would ingest", extra={"run_id": run_id, "url": raw_page.url}
+                    )
+                    continue
+                await ingest_article(article, context, stats, run_id, db=db, store=store)
+            except Exception:
+                stats["failed"] += 1
+                log.error(
+                    "Article ingestion failed",
+                    extra={"run_id": run_id, "url": raw_page.url},
+                    exc_info=True,
+                )
+                continue
+
+        if not dry_run and stats["failed"] == 0:
+            email_reader.mark_processed(email_update.email_uid)
+            log.info(
+                "Email marked processed",
+                extra={"run_id": run_id, "email_uid": email_update.email_uid},
+            )
+        elif not dry_run:
+            log.warning(
+                "Email left unread — run did not fully succeed; the next poll will retry",
+                extra={
+                    "run_id": run_id,
+                    "email_uid": email_update.email_uid,
+                    "failed": stats["failed"],
+                },
+            )
+
+        db.finish_run(run_id, stats)
+        log.info(
+            "Email-triggered run complete",
+            extra={"run_id": run_id, **stats, "elapsed_s": round(time.monotonic() - started, 1)},
+        )
+        return stats
+    except BaseException:
+        log.critical("Run crashed", extra={"run_id": run_id}, exc_info=True)
+        db.finish_run(run_id, stats, error="crashed")
+        raise
+    finally:
+        if context is not None:
+            try:
+                await context.close()
+            except Exception:  # noqa: BLE001
+                pass
+            await login.close_browser()
+        db.close()
 
 
 def start_scheduler() -> None:
-    raise NotImplementedError("The blocking scheduler lands in Milestone 3")
+    """Start the APScheduler blocking scheduler (email mode). Does not return."""
+    from apscheduler.schedulers.blocking import BlockingScheduler
+
+    from config import EMAIL_POLL_INTERVAL, SCHEDULE_DAY, SCHEDULE_HOUR
+
+    def _job():
+        asyncio.run(run_email_triggered())
+
+    scheduler = BlockingScheduler()
+    scheduler.add_job(_job, "cron", day=SCHEDULE_DAY, hour=SCHEDULE_HOUR, minute=0)
+    scheduler.add_job(_job, "interval", hours=EMAIL_POLL_INTERVAL)
+    log.info(
+        "Email scheduler started",
+        extra={
+            "schedule_day": SCHEDULE_DAY,
+            "schedule_hour": SCHEDULE_HOUR,
+            "poll_interval_h": EMAIL_POLL_INTERVAL,
+        },
+    )
+    scheduler.start()
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────
@@ -405,7 +571,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--inspect", metavar="URL|PATH")
     p.add_argument("--stats", action="store_true")
     p.add_argument("--clear-lock", action="store_true")
-    p.add_argument("--once", action="store_true", help="email mode — Milestone 3")
+    p.add_argument("--once", action="store_true", help="check email once, ingest, exit")
     return p
 
 
@@ -436,11 +602,12 @@ def main(argv: list[str] | None = None) -> int:
         only = args.only.split(",") if args.only else None
         asyncio.run(run_corpus_sync(args.dir, args.dry_run, only, args.limit, args.force))
         return 0
+    if args.once:
+        asyncio.run(run_email_triggered(dry_run=args.dry_run))
+        return 0
 
-    print(
-        "Email mode (bare invocation / --once) lands in Milestone 3. Use --corpus.", file=sys.stderr
-    )
-    return 2
+    start_scheduler()  # blocking; email mode
+    return 0
 
 
 if __name__ == "__main__":  # pragma: no cover

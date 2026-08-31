@@ -366,7 +366,7 @@ with `login`. `crawler` needs `login`. `monthly_job` email mode needs all four.
     == 200`, `ensure_authenticated` always called with the step-(a) URL.
   - Files: `scraper/crawler.py`, `tests/scraper/test_crawler.py`.
 
-- [ ] **M3.5 — `scheduler/monthly_job.py` email mode**
+- [x] **M3.5 — `scheduler/monthly_job.py` email mode**
   - Acceptance: replace the `NotImplementedError` stubs with `run_email_triggered(dry_run)`
     and `start_scheduler()` per `SPEC_monthly_job.md` — check email → filter already-indexed
     (still fetched) → `login.get_authenticated_context()` (catch `ManualLoginRequiredError`
@@ -404,6 +404,16 @@ Milestone 3 is done when SPEC.md § *Success Criteria* "Phase 2" holds.
 Things the specs left ambiguous that were decided during implementation. Fold the
 important ones back into SPEC.md.
 
+- **M3.5** — email mode replaces the M2 `NotImplementedError` stubs. The mailbox / data
+  exception dispatch is by `type(exc).__name__` (the spec's error classes live in
+  `email_reader`; importing them into `monthly_job` for `except` clauses would couple the
+  two). Bare `monthly_job.py` invocation now **blocks** in `start_scheduler()` — the M2
+  test that asserted `main([]) == 2` had to be replaced (it hung the whole suite until
+  fixed). Added **`pytest-timeout`** (`--timeout=120` in `addopts`) so a hung
+  browser/scheduler test fails instead of blocking CI. The **Phase-2 image download** was
+  folded into `image_transcriber._download` here (httpx + Playwright session cookies,
+  401 → Playwright-page fallback) — email mode is useless without it, and it was stubbed
+  as `NotImplementedError` in M2.5.
 - **M3.1** — `extractor` uses `trafilatura.bare_extraction(with_metadata=True)` for
   title/author/date/tags with a `<title>`/`<h1>` fallback, and `trafilatura.extract` for
   the body with a `BeautifulSoup.get_text` fallback. `pandas.read_html` in pandas 3.x

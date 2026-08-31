@@ -5,8 +5,9 @@ Branches on `ImageRef.local_path`, never on `article.source`:
   - set  -> read from disk (Phase 1, corpus). No network, no cookies.
   - None -> download via the Playwright browser context (Phase 2).
 
-**Milestone 2 implements the local path only.** The Phase-2 download path is stubbed:
-a web image with no `browser_context` comes back `skipped=True, "no_browser_context"`.
+Phase 2 downloads via `httpx` with the Playwright session cookies (paywall images) or
+plain `httpx` (external CDN), falling back to a Playwright page load on a 401. A web image
+with no `browser_context` comes back `skipped=True, "no_browser_context"`.
 
 Returns exactly one `ImageTranscription` per entry in `article.images`, in order — never a
 shorter list. `chunker.py` filters the skipped ones.
@@ -23,6 +24,7 @@ from typing import TYPE_CHECKING
 from PIL import Image, UnidentifiedImageError
 
 from config import (
+    DOWNLOAD_TIMEOUT_S,
     IMAGE_CACHE_DB,
     IMAGE_CACHE_DIR,
     MAX_IMAGE_MB,
@@ -160,7 +162,7 @@ async def transcribe_images(
                 results.append(_skip(ref, "over_cap"))
                 continue
 
-            image_bytes = _resolve_bytes(ref, browser_context)
+            image_bytes = await _resolve_bytes(ref, browser_context)
             if image_bytes is None:
                 results.append(_skip(ref, _unavailable_reason(ref)))
                 continue
@@ -187,8 +189,8 @@ def _unavailable_reason(ref: ImageRef) -> str:
     return "unavailable" if ref.local_path is not None else "no_browser_context"
 
 
-def _resolve_bytes(ref: ImageRef, browser_context: object | None) -> bytes | None:
-    if ref.local_path is not None:
+async def _resolve_bytes(ref: ImageRef, browser_context: object | None) -> bytes | None:
+    if ref.local_path is not None:  # Phase 1 — corpus, from disk
         try:
             return Path(ref.local_path).read_bytes()
         except OSError:
@@ -198,11 +200,55 @@ def _resolve_bytes(ref: ImageRef, browser_context: object | None) -> bytes | Non
                 exc_info=True,
             )
             return None
-    # Phase 2 web image
+
+    # Phase 2 — scraped web page
     if browser_context is None:
         log.error("Paywall image with no browser context — skipping", extra={"url": ref.src})
         return None
-    raise NotImplementedError("Phase 2 image download lands in Milestone 3")  # pragma: no cover
+    return await _download(ref, browser_context)
+
+
+async def _download(ref: ImageRef, browser_context) -> bytes | None:
+    import httpx
+
+    cookies = {}
+    if ref.is_paywall:
+        cookies = {c["name"]: c["value"] for c in await browser_context.cookies()}
+
+    try:
+        async with httpx.AsyncClient(
+            cookies=cookies, follow_redirects=True, timeout=DOWNLOAD_TIMEOUT_S
+        ) as client:
+            resp = await client.get(ref.src)
+        if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image/"):
+            log.debug("Downloaded image", extra={"image_url": ref.src})
+            return resp.content
+        if resp.status_code == 401 and ref.is_paywall:
+            log.warning(
+                "Cookie injection failed — retrying via Playwright", extra={"image_url": ref.src}
+            )
+            return await _download_via_page(ref, browser_context)
+        log.warning(
+            "Download failed", extra={"image_url": ref.src, "status_code": resp.status_code}
+        )
+        return None
+    except httpx.HTTPError as exc:
+        log.warning(
+            "Download failed", extra={"image_url": ref.src, "error_type": type(exc).__name__}
+        )
+        return None
+
+
+async def _download_via_page(ref: ImageRef, browser_context) -> bytes | None:
+    page = await browser_context.new_page()
+    try:
+        resp = await page.goto(ref.src)
+        return await resp.body() if resp and resp.ok else None
+    except Exception:  # noqa: BLE001
+        log.error("Playwright download also failed", extra={"image_url": ref.src}, exc_info=True)
+        return None
+    finally:
+        await page.close()
 
 
 def _handle_one(

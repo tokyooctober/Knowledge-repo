@@ -114,6 +114,23 @@ def _sync_corpus(dry_run: bool) -> None:
     print(f"corpus sync: {stats}")
 
 
+def _check_email(dry_run: bool) -> None:
+    import asyncio
+
+    from config import phase2_configured
+    from scheduler.monthly_job import run_email_triggered
+
+    if not phase2_configured():
+        print(
+            "Phase 2 is not configured — set LOGIN_URL / TRUSTED_SENDER / SITE_DOMAIN / "
+            "HEALTH_CHECK_URL in .env.",
+            file=sys.stderr,
+        )
+        return
+    stats = asyncio.run(run_email_triggered(dry_run=dry_run))
+    print(f"email check: {stats}")
+
+
 # ── argparse ───────────────────────────────────────────────────────────────
 
 
@@ -150,8 +167,8 @@ def main(argv: list[str] | None = None) -> int:
         _print_stats()
         return 0
     if args.check_email:
-        print("Email-triggered ingestion is not built yet (Milestone 3).", file=sys.stderr)
-        return 2
+        _check_email(args.dry_run)
+        return 0
     if args.sync_corpus:
         _sync_corpus(args.dry_run)
         return 0
