@@ -7,8 +7,6 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-import pytest
-
 import ingestion.chunker as ck
 from ingestion.chunker import chunk_article
 from models import Article, ImageRef, ImageTranscription

@@ -210,7 +210,7 @@ M2.3b chunker ─────┴────────────────
   - Files: `ingestion/image_transcriber.py`, `tests/ingestion/test_image_transcriber.py`,
     `tests/fixtures/images/**`.
 
-- [ ] **M2.6 — `scheduler/monthly_job.py` (corpus mode only)**
+- [x] **M2.6 — `scheduler/monthly_job.py` (corpus mode only)**
   - Acceptance: `run_corpus_sync(corpus_dir, dry_run, only, limit, force)`,
     `ingest_article(article, context=None, stats, run_id, force)`, `run_inspect`,
     `run_reset(assume_yes)`, `run_prune(dry_run, force)` per `SPEC_monthly_job.md` — the
@@ -293,6 +293,14 @@ Milestone 3 is done when SPEC.md § *Success Criteria* "Phase 2" holds.
 Things the specs left ambiguous that were decided during implementation. Fold the
 important ones back into SPEC.md.
 
+- **M2.6** — the spec's `ingest_article(article, context, stats, run_id, force=False)`
+  assumes module-global `metadata_db` / `vector_store`. The implementation instead takes
+  `*, db, store` (dependency injection) — `run_corpus_sync` opens one `MetadataDB` and one
+  `VectorStore` and threads them through, which keeps the integration tests honest (real
+  in-memory DB + Qdrant, mock providers). Email-mode functions and `start_scheduler`
+  raise `NotImplementedError("Milestone 3")`; the CLI rejects `--once` / bare invocation.
+  `run_inspect` is a compact drift report (loaded vs stored hash, resolved images, chunk
+  count) rather than the full gate-3 dump — enough for the Success Criteria, expandable.
 - **M2.4** — `embed_query` truncates at `CHUNK_SIZE` (512) tokens — the local BGE/nomic
   models' window and already the configured budget; no separate query-limit constant.
 - **M2.5** — `transcribe_images` is `async` (for the M3 download path) but the corpus
