@@ -312,7 +312,7 @@ with `login`. `crawler` needs `login`. `monthly_job` email mode needs all four.
   - Files: `ingestion/extractor.py`, `tests/ingestion/test_extractor.py`,
     `tests/fixtures/html/**`.
 
-- [ ] **M3.2 — `inbox/email_reader.py`**
+- [x] **M3.2 — `inbox/email_reader.py`**
   - Acceptance: `read_update_email() -> EmailUpdate | None` and `mark_processed(uid)` per
     `SPEC_email_reader.md` — Gmail API (primary) / IMAP (fallback) behind `EMAIL_BACKEND`;
     `UNSEEN` + `FROM == TRUSTED_SENDER` + subject server-substring then client-regex;

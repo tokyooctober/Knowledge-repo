@@ -97,12 +97,15 @@ Else:
 ### Step 2 — Locate anchor phrase (case-insensitive)
 ```python
 ANCHOR_PATTERN = re.compile(
-    r"here[''\u2019]s\s+a\s+direct\s+link\s+to\s+the\s+report\s*:?\s*(https?://\S+)",
+    # after the colon, HORIZONTAL space only ([ \t]) \u2014 a \s* here would swallow the
+    # newline and grab the members-area URL that sits above the anchor phrase.
+    r"here[''\u2019]s\s+a\s+direct\s+link\s+to\s+the\s+report[ \t]*:?[ \t]*(https?://\S+)",
     re.IGNORECASE
 )
 ```
 
-The regex captures the URL on the same line as the anchor if they appear together, or falls through to Step 3 if the URL is on the next line.
+The regex captures the URL only when it is on the same line as the anchor; a URL on a
+following line falls through to Step 3.
 
 ### Step 3 — Fallback: URL on the line following the anchor
 ```python
