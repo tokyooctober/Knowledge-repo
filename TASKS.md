@@ -191,7 +191,7 @@ M2.3b chunker ─────┴────────────────
     `embed_query` applies the prefix.
   - Files: `ingestion/embedder.py`, `tests/ingestion/test_embedder.py`.
 
-- [ ] **M2.5 — `ingestion/image_transcriber.py` (local-path path only)**
+- [x] **M2.5 — `ingestion/image_transcriber.py` (local-path path only)**
   - Acceptance: `transcribe_images(article, browser_context=None)` and
     `count_uncached(images)` per `SPEC_image_transcriber.md` — **exactly one
     `ImageTranscription` per `article.images` entry, in order, never shorter**; branch on
@@ -293,6 +293,14 @@ Milestone 3 is done when SPEC.md § *Success Criteria* "Phase 2" holds.
 Things the specs left ambiguous that were decided during implementation. Fold the
 important ones back into SPEC.md.
 
+- **M2.4** — `embed_query` truncates at `CHUNK_SIZE` (512) tokens — the local BGE/nomic
+  models' window and already the configured budget; no separate query-limit constant.
+- **M2.5** — `transcribe_images` is `async` (for the M3 download path) but the corpus
+  branch does no awaiting. The image cache is its own sqlite db (`data/image_cache.db`),
+  opened per call. The Phase-2 download raises `NotImplementedError` — unreachable in M2
+  since corpus refs always have `local_path`; a web ref with `browser_context=None` is
+  short-circuited to `skipped="no_browser_context"` before that. `media_type` is derived
+  from the cached file's format (`image/png`, or `image/jpeg` when the source is JPEG).
 - **M2.2** — the fixture corpus is built in `tmp_path` by a `write_article()` helper
   (real image bytes, no binaries in git) rather than checked in under
   `tests/fixtures/corpus/`. The spec's **markdown↔HTML parity test** needs
