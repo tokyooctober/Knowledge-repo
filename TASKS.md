@@ -21,7 +21,7 @@ M1.1 ─► M1.2 ─┬─► M1.3 ─► M1.4 ─► M1.5 ─► M1.6 ─► M1
                   config imports ConfigError from models; logger imports LOG_* from config)
 ```
 
-- [ ] **M1.1 — Project scaffolding**
+- [x] **M1.1 — Project scaffolding**
   - Acceptance: `requirements.txt` matches SPEC.md § *Dependencies* (add `pytest-cov`,
     `ruff`). `pyproject.toml` configures `ruff` (line length 100, format + check) and
     `pytest` (`testpaths = ["tests"]`, `asyncio_mode = "auto"`, `--cov` defaults).
@@ -33,7 +33,7 @@ M1.1 ─► M1.2 ─┬─► M1.3 ─► M1.4 ─► M1.5 ─► M1.6 ─► M1
   - Files: `requirements.txt`, `pyproject.toml`, `.env.template`, `tests/conftest.py`,
     `tests/__init__.py` (+ package `__init__.py` under each source dir).
 
-- [ ] **M1.2 — `models.py`**
+- [x] **M1.2 — `models.py`**
   - Acceptance: every dataclass in SPEC.md § *Shared data types* verbatim (field names,
     order, types), plus `content_hash()`, `canonical_url()`, and the shared exceptions
     `ConfigError`, `ModelMismatchError`, `VisionNotSupportedError`. `from __future__ import
@@ -133,3 +133,27 @@ Build steps 13–17: `email_reader.py` → `login.py` → `crawler.py` → `extr
 Success Criteria hold.
 
 Milestone 3 is done when SPEC.md § *Success Criteria* "Phase 2" holds.
+
+---
+
+## Decisions log
+
+Things the specs left ambiguous that were decided during implementation. Fold the
+important ones back into SPEC.md.
+
+- **M1.1** — `ruff` (≥ 0.14) also formats Markdown and would rewrite the deliberate
+  column alignment in the spec code blocks. `pyproject.toml` excludes `*.md` / `*.rst`
+  from ruff entirely. CI's "fails on a format diff" rule is Python-only.
+- **M1.1** — flat layout (modules + packages at repo root) declared in `pyproject.toml`
+  via `py-modules` + `packages`; `pip install -e .` makes `import config` etc. work from
+  anywhere. Added `.gitattributes` (`eol=lf`) so the repo is byte-identical across
+  platforms despite Windows checkouts.
+- **M1.1** — toolchain (`ruff`, `pytest`, `pytest-cov`, `pytest-asyncio`) + M1 runtime
+  deps (`python-dotenv`, `qdrant-client`) installed and verified. The full
+  `requirements.txt` install (torch via `sentence-transformers`, playwright, streamlit —
+  none needed before Milestone 2) runs separately; not a blocker for M1.
+- **M1.2** — `content_hash` calls `Path.stat()`, so a corpus image that has vanished
+  raises `FileNotFoundError` rather than skipping silently. `md_loader` resolves/drops
+  missing images before calling it (SPEC_md_loader.md step 4), so this only bites if a
+  file disappears mid-run — acceptable as a loud failure. Documented via a test.
+

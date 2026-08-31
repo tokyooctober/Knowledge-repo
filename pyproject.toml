@@ -1,0 +1,58 @@
+[project]
+name = "knowledge-repo"
+version = "0.1.0"
+description = "Personal RAG system over one author's premium articles, with cited answers."
+requires-python = ">=3.11"
+dynamic = ["dependencies"]
+
+[tool.setuptools]
+# Flat layout: modules and packages live at the repo root (see SPEC.md § Project directory tree).
+py-modules = ["app", "config", "logger", "models", "llm_provider"]
+packages = ["inbox", "scraper", "ingestion", "storage", "query", "scheduler"]
+
+[tool.setuptools.dynamic]
+dependencies = { file = ["requirements.txt"] }
+
+# ── Ruff: the only formatter and linter (SPEC.md § Code Style) ──────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+# ruff (>=0.14) also formats Markdown; the specs use deliberate column alignment in their
+# code blocks, so keep ruff off every non-Python file.
+extend-exclude = [".venv", "corpus", "*.md", "*.rst"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort — stdlib / third-party / first-party, blank-line separated
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+]
+# first-party for import grouping
+[tool.ruff.lint.isort]
+known-first-party = [
+    "app", "config", "logger", "models", "llm_provider",
+    "inbox", "scraper", "ingestion", "storage", "query", "scheduler",
+]
+
+# ── Pytest ────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-q"
+filterwarnings = ["error::DeprecationWarning"]
+
+# ── Coverage (SPEC.md § Testing Strategy: 85% overall, 95% for the pure core) ──
+[tool.coverage.run]
+branch = true
+omit = ["tests/*", ".venv/*"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
