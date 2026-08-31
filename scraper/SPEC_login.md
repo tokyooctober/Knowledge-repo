@@ -166,7 +166,7 @@ form can vanish from the DOM for reasons that have nothing to do with a successf
 1. IF state.json exists AND is readable:
    a. Restore BrowserContext from state.json
    b. Open a new page
-   c. Navigate to HEALTH_CHECK_URL, waitUntil="networkidle"
+   c. Navigate to HEALTH_CHECK_URL, waitUntil="domcontentloaded"
    d. IF SUCCESS_SELECTOR present → session valid
         log INFO "Session valid — no login needed"
         close page; return context
@@ -220,7 +220,7 @@ login page. The crawler holds the canonical URL for the request; this function i
 
 6. HAND CONTROL BACK — return the page to where the crawler wanted it.
      IF page.url != target_url:
-       await page.goto(target_url, waitUntil="networkidle", timeout=PAGE_TIMEOUT_MS)
+       await page.goto(target_url, waitUntil="domcontentloaded", timeout=PAGE_TIMEOUT_MS)
 
      A successful login almost never leaves the browser on the article. The site sends
      the human to a members dashboard, an interstitial, or a "welcome back" page. If this
@@ -250,7 +250,7 @@ login page. The crawler holds the canonical URL for the request; this function i
 
 2. IF the current page shows no login form (e.g. we were sent here by an expired session
    at HEALTH_CHECK_URL and the site answered with a bare 403 page):
-     await page.goto(LOGIN_URL, waitUntil="networkidle")
+     await page.goto(LOGIN_URL, waitUntil="domcontentloaded")
 
 3. Bring the window forward:  await page.bring_to_front()
 

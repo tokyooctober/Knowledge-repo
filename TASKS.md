@@ -330,7 +330,7 @@ with `login`. `crawler` needs `login`. `monthly_job` email mode needs all four.
   - Files: `inbox/email_reader.py`, `tests/inbox/test_email_reader.py`,
     `tests/fixtures/*.eml`.
 
-- [ ] **M3.3 — `scraper/login.py`**
+- [x] **M3.3 — `scraper/login.py`**
   - Acceptance: `get_authenticated_context()` and `ensure_authenticated(page, expected_url)`
     and `close_browser()` per `SPEC_login.md` — **no credentials anywhere**; `state.json`
     restore + health-check; `_human_available()` (`INTERACTIVE_LOGIN` + `stdin.isatty`)
@@ -404,6 +404,17 @@ Milestone 3 is done when SPEC.md § *Success Criteria* "Phase 2" holds.
 Things the specs left ambiguous that were decided during implementation. Fold the
 important ones back into SPEC.md.
 
+- **M3.1** — `extractor` uses `trafilatura.bare_extraction(with_metadata=True)` for
+  title/author/date/tags with a `<title>`/`<h1>` fallback, and `trafilatura.extract` for
+  the body with a `BeautifulSoup.get_text` fallback. `pandas.read_html` in pandas 3.x
+  needs `io.StringIO(...)`, not a bare string.
+- **M3.3** — `login.py` uses `wait_until="domcontentloaded"` for every `page.goto`, not
+  the spec's `"networkidle"` — a login page that polls itself (2FA widgets, keep-alives,
+  and the test fixture's auto-reload) never reaches network-idle and the goto times out.
+  `_selector_present()` wraps `query_selector` with a one-retry tolerance for a page torn
+  down mid-poll (the spec calls for this: "swallow per-poll navigation errors"). Browser
+  tests launch real headless Chromium against a threaded `http.server`; `SPEC_login.md`'s
+  `networkidle` should be updated to `domcontentloaded`.
 - **M2.9** — `app.py` runs the CLI from `main()`; the Streamlit UI (`_streamlit_app`) is
   guarded by `streamlit.runtime.exists()` and left `# pragma: no cover` — it is exercised
   by `streamlit run app.py`, not the unit suite (per SPEC_app.md testing notes). `--json`

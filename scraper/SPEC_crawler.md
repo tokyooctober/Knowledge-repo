@@ -111,7 +111,7 @@ class RawPage:
 ```
 0. SESSION PRE-CHECK
    page = await browser_context.new_page()
-   await page.goto(HEALTH_CHECK_URL, waitUntil="networkidle")
+   await page.goto(HEALTH_CHECK_URL, waitUntil="domcontentloaded")
    authenticated = await login.ensure_authenticated(page, HEALTH_CHECK_URL)
    IF not authenticated:
      await page.close()
@@ -146,7 +146,7 @@ class RawPage:
      a close inside a branch.
 
      a. NAVIGATE  (bind the response — step (e) needs it)
-        response = await page.goto(url, waitUntil="networkidle",
+        response = await page.goto(url, waitUntil="domcontentloaded",
                                    timeout=PAGE_TIMEOUT_MS)
         # On PlaywrightTimeoutError: log WARNING, sleep 5 s, retry ONCE.
         # If the retry also times out, log ERROR and `continue` — the finally
