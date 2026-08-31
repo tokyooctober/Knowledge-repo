@@ -297,7 +297,7 @@ with `login`. `crawler` needs `login`. `monthly_job` email mode needs all four.
 > async. Fixtures build `async_playwright()` directly. Chromium is installed
 > (`playwright install chromium`); CI must run that step.
 
-- [ ] **M3.1 — `ingestion/extractor.py`**
+- [x] **M3.1 — `ingestion/extractor.py`**
   - Acceptance: `extract(raw_page) -> Article | None` per `SPEC_extractor.md` — `None` for
     `status_code != 200`; body via `trafilatura` with a BeautifulSoup fallback; HTML
     tables → Markdown (`pandas.read_html`, hand-rolled fallback) prefixed with index +
