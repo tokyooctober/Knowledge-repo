@@ -137,7 +137,7 @@ M2.3b chunker ─────┴────────────────
 > open the spec, then confirm the exact call against the installed package before writing
 > it. Record any drift in the Decisions log and patch the spec.
 
-- [ ] **M2.1 — `llm_provider.py` + mock providers**
+- [x] **M2.1 — `llm_provider.py` + mock providers**
   - Acceptance: `TextProvider` / `VisionProvider` / `EmbeddingProvider` protocols and the
     concrete Anthropic + OpenAI-compat + local classes from `SPEC_llm_provider.md`, with
     the `__init__`s the review added (vision reads `VISION_*`, never `LLM_*`). Factories
@@ -293,6 +293,14 @@ Milestone 3 is done when SPEC.md § *Success Criteria* "Phase 2" holds.
 Things the specs left ambiguous that were decided during implementation. Fold the
 important ones back into SPEC.md.
 
+- **M2.1** — installed SDK majors (`anthropic` 1.2, `openai` 3.6) still expose the calls
+  the spec's code uses (`messages.create(system=…)`, `chat.completions.create`,
+  `.usage.*`), so the provider code is unchanged from the spec. Additions: each provider
+  lazy-imports its SDK in `__init__` (keeps `import llm_provider` cheap and honours
+  "import only what the backend needs"); rate-limit retry uses a predicate on
+  `type(exc).__name__ == "RateLimitError"` rather than importing both SDKs' exception
+  classes at module load; `TextResponse` lives in `llm_provider.py` (not `models.py`) as
+  the spec has it; `_reset_providers_for_tests()` clears the singletons for tests.
 - **M1.1** — `ruff` (≥ 0.14) also formats Markdown and would rewrite the deliberate
   column alignment in the spec code blocks. `pyproject.toml` excludes `*.md` / `*.rst`
   from ruff entirely. CI's "fails on a format diff" rule is Python-only.
