@@ -350,7 +350,7 @@ with `login`. `crawler` needs `login`. `monthly_job` email mode needs all four.
   - Files: `scraper/login.py`, `tests/scraper/test_login.py`, `tests/scraper/_server.py`
     (shared fixture server, also used by M3.4).
 
-- [ ] **M3.4 — `scraper/crawler.py`**
+- [x] **M3.4 — `scraper/crawler.py`**
   - Acceptance: `fetch_pages(context, urls, known_urls) -> list[RawPage]` per
     `SPEC_crawler.md` — session pre-check (`ensure_authenticated(page, HEALTH_CHECK_URL)`
     → `SessionExpiredError` / `LoginStateError` on failure); dedup; per-URL one
