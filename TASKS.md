@@ -228,7 +228,7 @@ M2.3b chunker ─────┴────────────────
     `transcribe_images` is called with `context=None`.
   - Files: `scheduler/monthly_job.py`, `tests/scheduler/test_monthly_job.py`.
 
-- [ ] **M2.7 — `query/retriever.py`**
+- [x] **M2.7 — `query/retriever.py`**
   - Acceptance: `retrieve(query, top_k, filters)` per `SPEC_retriever.md` — `embed_query`
     → `vector_store.search(top_k*2, filters)` → discard `< MIN_SCORE_THRESHOLD` →
     `MAX_CHUNKS_PER_ARTICLE` cap → trim to `top_k`, sorted by score desc. `ValueError` on
@@ -240,7 +240,7 @@ M2.3b chunker ─────┴────────────────
     raise, and the model-mismatch guard.
   - Files: `query/retriever.py`, `tests/query/test_retriever.py`.
 
-- [ ] **M2.8 — `query/answerer.py`**
+- [x] **M2.8 — `query/answerer.py`**
   - Acceptance: `answer(query, results) -> Answer` per `SPEC_answerer.md` — empty results
     → graceful "not found" with **no** provider call; cap at `MAX_CONTEXT_CHUNKS` +
     truncate at `MAX_CHUNK_CHARS`; system + user message shape; `provider.complete`;
