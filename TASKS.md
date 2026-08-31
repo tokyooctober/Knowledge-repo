@@ -46,7 +46,7 @@ M1.1 ─► M1.2 ─┬─► M1.3 ─► M1.4 ─► M1.5 ─► M1.6 ─► M1
     and email spellings of one article to the same string; `""` in → `""` out.
   - Files: `models.py`, `tests/test_models.py`.
 
-- [ ] **M1.3 — `config.py`**
+- [x] **M1.3 — `config.py`**
   - Acceptance: every constant any module spec names is present (SPEC.md says this
     invariant is worth re-checking — grep the module specs). Phase 2 secrets and
     author-specific values use `os.environ.get(..., "")` / a generic default; `import
@@ -156,4 +156,12 @@ important ones back into SPEC.md.
   raises `FileNotFoundError` rather than skipping silently. `md_loader` resolves/drops
   missing images before calling it (SPEC_md_loader.md step 4), so this only bites if a
   file disappears mid-run — acceptable as a loud failure. Documented via a test.
+- **M1.3** — `phase2_configured()` is implemented as `try require_phase2_config() except
+  ConfigError: return False` — one source of truth for "is Phase 2 usable", instead of a
+  parallel list of checks that could drift.
+- **M1.6 (pending)** — `SPEC_vector_store.md` lists `DISTANCE_METRIC`, `ON_DISK_PAYLOAD`,
+  `HNSW_M`, `HNSW_EF_CONSTRUCT` in its config block, but they are **not** in SPEC.md §
+  Shared config and `DISTANCE_METRIC = Distance.COSINE` would force `config.py` to import
+  `qdrant_client` (which every module then pays for). Decision: keep these four as
+  module-level constants in `vector_store.py`; fix `SPEC_vector_store.md` to say so.
 
