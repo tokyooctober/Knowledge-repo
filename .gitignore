@@ -1,0 +1,21 @@
+# secrets & runtime state
+.env
+session/
+logs/
+data/
+images/
+debug/
+
+# local corpus (input data, never source) — only matters if MD_CORPUS_DIR is inside the repo
+corpus/
+
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
