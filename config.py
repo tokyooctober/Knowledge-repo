@@ -104,11 +104,16 @@ BATCH_SIZE = 64
 NORMALIZE_EMBEDDINGS = True
 
 # ── Storage ──────────────────────────────────────────────────────────────────
-QDRANT_HOST = "localhost"
-QDRANT_PORT = 6333
+# Qdrant runs in one of three modes, checked in this order by storage/vector_store.py:
+#   QDRANT_IN_MEMORY=true  → ephemeral, lost on exit (tests, throwaway runs)
+#   QDRANT_PATH=<dir>      → embedded on-disk store, no server needed (single-user default)
+#   otherwise             → connect to a Qdrant server at QDRANT_HOST:QDRANT_PORT
+QDRANT_IN_MEMORY = os.environ.get("QDRANT_IN_MEMORY", "").strip().lower() in ("1", "true", "yes")
+QDRANT_PATH = os.environ.get("QDRANT_PATH", "").strip() or None
+QDRANT_HOST = os.environ.get("QDRANT_HOST", "localhost")
+QDRANT_PORT = int(os.environ.get("QDRANT_PORT", "6333"))
 COLLECTION_NAME = "knowledge_repo"
 DB_PATH = "data/metadata.db"
-QDRANT_IN_MEMORY = False  # True for tests / local dev without Docker
 UPSERT_BATCH_SIZE = 100  # points per upsert call
 
 # ── Query ────────────────────────────────────────────────────────────────────

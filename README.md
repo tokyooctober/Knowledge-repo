@@ -26,7 +26,7 @@ and [`TASKS.md`](TASKS.md) for the build log.
 | Area | Choice |
 |---|---|
 | **Language** | Python 3.11+ |
-| **Vector store** | [Qdrant](https://qdrant.tech/) (`qdrant-client`); in-memory mode for tests |
+| **Vector store** | [Qdrant](https://qdrant.tech/) (`qdrant-client`) — embedded on-disk, server, or in-memory (see [Database setup](#database-setup)) |
 | **Metadata / cache** | SQLite (WAL mode) — article metadata, image-transcription cache |
 | **Embeddings** | `sentence-transformers` (local, default: `BAAI/bge-large-en-v1.5`) or any OpenAI-compatible endpoint |
 | **Text + vision LLM** | Provider abstraction over Anthropic, OpenAI, and OpenAI-compatible backends (`llm_provider.py`) |
@@ -83,8 +83,47 @@ additionally needs `LOGIN_URL`, `HEALTH_CHECK_URL`, `SITE_DOMAIN`, and `TRUSTED_
 (plus mailbox credentials). The system holds **no site credentials** — when a login is
 needed it opens a visible browser window and waits for you to sign in.
 
-Qdrant: run `docker run -p 6333:6333 qdrant/qdrant`, or set `QDRANT_IN_MEMORY=True` for
-local use without Docker.
+---
+
+## Database setup
+
+Two stores back a real run. **SQLite** (`data/metadata.db` — article metadata and ingestion
+history; `data/image_cache.db` — image transcription cache) needs nothing: the files and
+their parent directories are created on first use.
+
+**Qdrant** (the vector store) runs in one of three modes, selected by environment
+variables and checked in this order:
+
+| Mode | Set | Persistence | When |
+|---|---|---|---|
+| Embedded on-disk | `QDRANT_PATH=data/qdrant` | Survives restarts; single process only | **Default for one user** — no server, no Docker |
+| Server | *(nothing — or `QDRANT_HOST` / `QDRANT_PORT`)* | External service | Shared access, or a corpus large enough to want a tuned server |
+| In-memory | `QDRANT_IN_MEMORY=true` | Lost on exit | Quick trials and the test suite only |
+
+For server mode:
+
+```bash
+docker run -d --name qdrant -p 6333:6333 -v qdrant_storage:/qdrant/storage qdrant/qdrant
+```
+
+The collection (`knowledge_repo`) is created automatically on the first ingest, with
+`EMBEDDING_DIM` (default 1024) taken from `config.py` — it must match your embedding model.
+The model that built the collection is pinned on a sentinel point; a later run with a
+different model or dimension fails loudly. To switch models, empty the index first:
+
+```bash
+python scheduler/monthly_job.py --reset      # drop the collection + article rows (keeps the image cache)
+python scheduler/monthly_job.py --stats      # article / vector / run counts
+python scheduler/monthly_job.py --clear-lock # release a stale run lock after a crash
+```
+
+### First real run
+
+```bash
+python scheduler/monthly_job.py --corpus --dry-run     # what would be ingested, writes nothing
+python scheduler/monthly_job.py --corpus               # ingest for real
+python scheduler/monthly_job.py --corpus --limit 5     # ingest a handful first to check cost
+```
 
 ---
 

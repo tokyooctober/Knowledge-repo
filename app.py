@@ -243,14 +243,18 @@ def _streamlit_app() -> None:  # pragma: no cover - exercised via `streamlit run
         )
 
 
+_UNDER_STREAMLIT = False
 try:  # pragma: no cover
     import streamlit.runtime as _st_runtime
 
-    if _st_runtime.exists():
-        _streamlit_app()
+    # True only inside a real `streamlit run` session — importing the module is not enough,
+    # so `python app.py …` still reaches main() with streamlit installed.
+    _UNDER_STREAMLIT = _st_runtime.exists()
 except ImportError:  # pragma: no cover
     pass
 
 
-if __name__ == "__main__" and "streamlit" not in sys.modules:  # pragma: no cover
+if _UNDER_STREAMLIT:  # pragma: no cover
+    _streamlit_app()
+elif __name__ == "__main__":  # pragma: no cover
     raise SystemExit(main())

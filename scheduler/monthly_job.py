@@ -23,6 +23,10 @@ import sys
 import time
 from pathlib import Path
 
+# Allow `python scheduler/monthly_job.py` (not just `-m scheduler.monthly_job`).
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
 from config import MD_CORPUS_DIR
 from ingestion import md_loader
 from ingestion.chunker import chunk_article

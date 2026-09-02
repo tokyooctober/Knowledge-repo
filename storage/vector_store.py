@@ -17,12 +17,14 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from qdrant_client import QdrantClient, models
+from qdrant_client.http.exceptions import ApiException
 
 from config import (
     COLLECTION_NAME,
     EMBEDDING_DIM,
     QDRANT_HOST,
     QDRANT_IN_MEMORY,
+    QDRANT_PATH,
     QDRANT_PORT,
     UPSERT_BATCH_SIZE,
 )
@@ -59,10 +61,12 @@ class VectorStore:
         try:
             if QDRANT_IN_MEMORY:
                 self.client = QdrantClient(location=":memory:")
+            elif QDRANT_PATH:  # pragma: no cover - embedded on-disk store
+                self.client = QdrantClient(path=QDRANT_PATH)
             else:  # pragma: no cover - needs a running Qdrant
                 self.client = QdrantClient(host=QDRANT_HOST, port=QDRANT_PORT)
             self._init_collection()
-        except (ConnectionError, OSError) as exc:  # pragma: no cover - needs a real server
+        except (ConnectionError, OSError, ApiException) as exc:  # pragma: no cover - needs a server
             log.critical(
                 "Qdrant unreachable",
                 extra={"host": QDRANT_HOST, "port": QDRANT_PORT, "error_type": type(exc).__name__},
