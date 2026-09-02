@@ -85,6 +85,173 @@ needed it opens a visible browser window and waits for you to sign in.
 
 ---
 
+## Choosing models (LLM, vision, embeddings)
+
+The system uses **three independent models for three different jobs.** They are configured
+separately, can point at different backends, and are swapped independently.
+
+| Role | Config block | Default | What it does | When it runs | Kind |
+|---|---|---|---|---|---|
+| **Embedding model** | `EMBEDDING_*` | `BAAI/bge-large-en-v1.5` (local) | Turns text into a fixed-length vector (1024 numbers) so similarity search can find the closest chunks. Produces **no prose.** | Ingest — every chunk of every article; **and** query — the incoming question | Encoder (`sentence-transformers` or an embeddings endpoint) |
+| **Text LLM** | `LLM_*` | `claude-sonnet-4-20250514` (Anthropic) | Reads the chunks that retrieval returned plus the question and **writes the natural-language answer with `[N]` citations.** Never touches the vector store. | Once per query, at the end (`query/answerer.py`) | Generative chat model |
+| **Vision LLM** | `VISION_*` | `claude-sonnet-4-20250514` (Anthropic) | Transcribes chart / table / diagram images to text, which is then chunked and embedded like any other text. | Ingest only, for images (`ingestion/image_transcriber.py`) | Generative multimodal model |
+
+```
+INGEST   article ─▶ [vision LLM] image→text ─▶ chunk ─▶ [embedding model] text→vector ─▶ Qdrant
+QUERY    question ─▶ [embedding model] text→vector ─▶ Qdrant: nearest chunks
+                                                          └─▶ [text LLM] chunks + question → cited answer
+```
+
+Consequences of the split:
+
+- **Changing the text or vision LLM needs no re-indexing** — the stored vectors are
+  untouched. Changing the embedding model *does* (see [below](#after-changing-any-embedding-setting--re-index)),
+  because its vectors *are* the index.
+- The embedding model is the retrieval-quality lever; the text LLM is the
+  answer-writing-quality lever. A weak embedding model returns the wrong chunks and no text
+  LLM can recover; a weak text LLM writes a poor answer from the right chunks.
+- The backends are mixed freely — e.g. local embeddings with Anthropic for answers. Note
+  that `anthropic` is not a valid embedding backend, so embeddings are always `local` or an
+  OpenAI-shaped endpoint even when `LLM_BACKEND = "anthropic"`.
+
+### Backends
+
+**Model choice lives in `config.py`, not `.env`.** `.env` carries only secrets (API keys)
+and machine-specific values (paths, URLs); which model runs is a code constant. Edit the
+relevant block in `config.py`, then put any API key the backend needs in `.env`.
+
+Every `*_BACKEND` constant accepts one of three values:
+
+| Backend | Runs where | API key |
+|---|---|---|
+| `anthropic` | Anthropic API (text + vision only — **not** embeddings) | `ANTHROPIC_API_KEY` |
+| `openai` | OpenAI API | `OPENAI_API_KEY` |
+| `openai_compat` | Any OpenAI-shaped endpoint — Ollama, vLLM, LM Studio, Text-Embeddings-Inference, Together.ai, Groq, … | none for local servers; else `OPENAI_COMPAT_API_KEY` (embeddings can use a separate `EMBEDDING_API_KEY`) |
+
+### Setting a local embedding model
+
+The `# Embedding` block of `config.py` (around line 96):
+
+```python
+EMBEDDING_BACKEND      = "local"                       # "local" | "openai" | "openai_compat"
+LOCAL_EMBEDDING_MODEL  = "BAAI/bge-large-en-v1.5"      # used when EMBEDDING_BACKEND == "local"
+OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"      # used for "openai" / "openai_compat"
+EMBEDDING_BASE_URL     = None                          # endpoint URL for "openai_compat"
+EMBEDDING_DIM          = 1024                          # MUST match the model's output size
+EMBEDDING_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+NORMALIZE_EMBEDDINGS   = True                          # True for cosine models (BGE, E5, GTE)
+```
+
+**Option A — in-process (`sentence-transformers`), the default.** No server, no key. The
+model is downloaded from HuggingFace on first use and cached under `~/.cache/huggingface`.
+Set `EMBEDDING_BACKEND = "local"` and edit `LOCAL_EMBEDDING_MODEL`:
+
+| `LOCAL_EMBEDDING_MODEL` | `EMBEDDING_DIM` | `EMBEDDING_QUERY_PREFIX` |
+|---|---|---|
+| `BAAI/bge-large-en-v1.5` *(default)* | `1024` | `Represent this sentence for searching relevant passages: ` |
+| `BAAI/bge-small-en-v1.5` | `384` | *(same as bge-large)* |
+| `intfloat/e5-large-v2` | `1024` | `query: ` |
+| `thenlper/gte-large` | `1024` | `""` *(empty string)* |
+| `sentence-transformers/all-MiniLM-L6-v2` | `384` | `""` *(empty string)* |
+
+`EMBEDDING_QUERY_PREFIX` is prepended to **search queries only**, never to stored
+documents — set it to whatever the model card specifies (empty for models that take none).
+
+**Option B — a local inference server (Ollama, vLLM, TEI).** Keeps the model out of this
+process. Example for Ollama running `nomic-embed-text`:
+
+```python
+EMBEDDING_BACKEND      = "openai_compat"
+OPENAI_EMBEDDING_MODEL = "nomic-embed-text"
+EMBEDDING_BASE_URL     = "http://localhost:11434/v1"
+EMBEDDING_DIM          = 768
+```
+
+Ollama needs no key. If your endpoint requires one, set `EMBEDDING_API_KEY` in `.env`
+(literal `ollama` also works for Ollama).
+
+> **`EMBEDDING_QUERY_PREFIX` applies to the `local` backend only.** The `openai`/
+> `openai_compat` embedding provider sends queries and documents verbatim — the constant is
+> ignored. `nomic-embed-text` still works this way, just without its `search_query:` /
+> `search_document:` asymmetry, so retrieval is a little weaker than a `local` BGE model.
+> If that matters, keep embeddings on the `local` backend and only move the text/vision LLMs
+> to a server.
+
+### Setting a local text + vision model
+
+Both the text LLM and the vision LLM run through the `openai_compat` backend pointed at a
+local server (Ollama shown here; vLLM / LM Studio work the same way). Unlike the embedding
+model, swapping either of these needs **no re-index** — the stored vectors are untouched.
+
+**Recommended (single workstation, ~16 GB VRAM):**
+
+| Role | `config.py` | Model | Why |
+|---|---|---|---|
+| Text | `LLM_MODEL` | `qwen2.5:14b-instruct` | Strong instruction-following and citation discipline at a size that fits one GPU. Drop to `llama3.1:8b` for ≤8 GB VRAM; go to `qwen2.5:32b-instruct` if you have the headroom. |
+| Vision | `VISION_MODEL` | `qwen2.5vl:7b` | Best small open model for **charts, tables, and document layout** — exactly what this role transcribes. Use `qwen2.5vl:32b` for higher-fidelity tables (transcription errors are cached and then embedded, so they matter). |
+
+```python
+# ── Text LLM — answer synthesis (query/answerer.py) ──
+LLM_BACKEND  = "openai_compat"
+LLM_MODEL    = "qwen2.5:14b-instruct"
+LLM_BASE_URL = "http://localhost:11434/v1"
+
+# ── Vision LLM — chart / table / diagram transcription (ingestion/image_transcriber.py) ──
+VISION_BACKEND  = "openai_compat"
+VISION_MODEL    = "qwen2.5vl:7b"
+VISION_BASE_URL = "http://localhost:11434/v1"
+```
+
+```bash
+ollama pull qwen2.5:14b-instruct
+ollama pull qwen2.5vl:7b
+# .env: no key needed for Ollama (or set OPENAI_COMPAT_API_KEY=ollama)
+```
+
+Notes:
+
+- **One server, one URL.** `LLM_BASE_URL` and `VISION_BASE_URL` are the same value here on
+  purpose — Ollama routes by the model name in each request, so both models share the
+  endpoint. They are separate constants only so you *can* split them across machines (e.g.
+  vision on a bigger GPU box, or text via a cloud endpoint).
+- **`VISION_MODEL` must be a recognised vision model** or the app refuses to start
+  (`VisionNotSupportedError`). Recognised families: Qwen2.5-VL / Qwen2-VL, Llama-3.2-Vision,
+  MiniCPM-V, LLaVA, Pixtral.
+- Ollama loads models on demand and unloads idle ones, so the text and vision models do not
+  need to fit in VRAM at the same time — ingest uses vision, query uses text, rarely at once.
+- **Raise the context window.** Ollama defaults `num_ctx` to a small value (2–4k). The
+  answer prompt runs ~2–3k tokens in + 1024 out, and image transcription adds the image
+  tokens on top — both can silently overflow the default and get truncated. Set
+  `OLLAMA_CONTEXT_LENGTH=8192` (env) or bake `PARAMETER num_ctx 8192` into a Modelfile. The
+  app cannot set this — `num_ctx` is not an OpenAI-API parameter.
+- **Image type detection is strict.** `ingestion/image_transcriber.py` first asks the vision
+  model to reply with *exactly one word* (`chart` / `table` / `diagram` / `photo` /
+  `unknown`); anything else — even `"Chart."` — is treated as `unknown` and the image is
+  **skipped, not transcribed**. Hosted models comply reliably; smaller local ones less so.
+  After an ingest, check the logs for `"image_type": "unknown"` skips — if they are frequent,
+  move to `qwen2.5vl:32b`.
+- Needs a recent Ollama (the OpenAI-compatible `/v1` endpoint must accept `image_url` with a
+  base64 data URI — true on current releases).
+- Fully local answers also need a local embedding model (previous section). With the text,
+  vision, and embedding models all local, the pipeline makes **no third-party API calls.**
+
+### After changing any embedding setting — re-index
+
+`EMBEDDING_DIM` and the model name are pinned into the Qdrant collection on the first
+ingest. A later run with a different model or dimension **fails loudly** instead of mixing
+incompatible vectors. Rebuild the index:
+
+```bash
+python scheduler/monthly_job.py --reset      # drop the collection + article rows (image cache kept)
+python scheduler/monthly_job.py --corpus     # re-embed the whole corpus with the new model
+```
+
+A new embedding model also shifts the similarity-score range, so revisit
+`MIN_SCORE_THRESHOLD` (`config.py`, default `0.35`, tuned for BGE) — too high and every
+query returns "not found", too low and off-topic chunks leak in.
+
+---
+
 ## Database setup
 
 Two stores back a real run. **SQLite** (`data/metadata.db` — article metadata and ingestion
@@ -107,9 +274,10 @@ docker run -d --name qdrant -p 6333:6333 -v qdrant_storage:/qdrant/storage qdran
 ```
 
 The collection (`knowledge_repo`) is created automatically on the first ingest, with
-`EMBEDDING_DIM` (default 1024) taken from `config.py` — it must match your embedding model.
-The model that built the collection is pinned on a sentinel point; a later run with a
-different model or dimension fails loudly. To switch models, empty the index first:
+`EMBEDDING_DIM` (default 1024) taken from `config.py` — it must match your embedding model
+(see [Choosing models](#choosing-models-llm-vision-embeddings)). The model that built the
+collection is pinned on a sentinel point; a later run with a different model or dimension
+fails loudly.
 
 ```bash
 python scheduler/monthly_job.py --reset      # drop the collection + article rows (keeps the image cache)
@@ -160,8 +328,9 @@ pytest --cov --cov-report=term-missing
 
 ## Roadmap
 
-The system today does dense retrieval over chunks. The next three steps move it toward a
-structured, self-hosted knowledge base:
+The system today does dense retrieval over chunks (and can already run fully local — see
+[Choosing models](#choosing-models-llm-vision-embeddings)). The next two steps move it
+toward a structured knowledge base:
 
 1. **Entity resolution** — extract people, institutions, assets, and concepts from every
    article and resolve mentions to canonical entities (e.g. "the Fed", "Federal Reserve",
@@ -172,7 +341,3 @@ structured, self-hosted knowledge base:
    effect on Y?") rather than relying on chunk similarity alone. Retrieval becomes a hybrid
    of vector search and graph walks.
 
-3. **Local LLM** — move text generation and vision transcription onto a locally hosted
-   model (via the existing `openai_compat` backend — Ollama / vLLM), so the whole pipeline,
-   including entity extraction and answer synthesis, runs without a third-party API. The
-   provider abstraction in `llm_provider.py` already isolates this change to configuration.
