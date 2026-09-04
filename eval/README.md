@@ -115,6 +115,31 @@ that agrees best with you:
 # prints combined agreement per model; set EVAL_JUDGE_MODEL in .env to the winner
 ```
 
+## Smoke test on a partial ingest
+
+Before committing to the full multi-hour `scheduler/monthly_job.py --corpus`, validate
+the whole eval pipeline end to end against whatever you've already ingested
+(`--corpus --limit N`):
+
+```bash
+# 0. a handful of throwaway questions, sampled ONLY from already-ingested articles
+.venv-eval/bin/python eval/build_testset.py --size 10 --articles 10 --ingested-only
+.venv-eval/bin/python eval/review_testset.py            # quick accept pass
+
+# 1. run + score
+.venv/bin/python      eval/run_system.py --limit 10
+.venv-eval/bin/python eval/score_ragas.py --results eval/results/run_<ts>.jsonl --passes 1
+```
+
+`--ingested-only` matters: without it, `build_testset.py` samples across the *whole*
+corpus on disk by publication date, regardless of what's actually in Qdrant. On a
+partial ingest that means most generated questions reference articles not yet indexed
+— `run_system.py` would then retrieve nothing/wrong context for them, which looks like
+a retrieval bug but is really just an article that hasn't been ingested yet.
+
+This smoke set is throwaway — don't commit it. Once the full ingest is done, delete
+`eval/dataset/{candidates,testset}.jsonl` and build the real one without `--ingested-only`.
+
 ## Build the test set (once, then freeze)
 
 ```bash

@@ -13,6 +13,11 @@ Nothing here is trusted yet. Run eval/review_testset.py next to hand-accept rows
 into the frozen eval/dataset/testset.jsonl.
 
     .venv-eval/bin/python eval/build_testset.py --size 60 --articles 40 --seed 7
+
+Smoke-testing a partial ingest (--limit N)? Add --ingested-only so every sampled
+article is one that's actually in the vector store already:
+
+    .venv-eval/bin/python eval/build_testset.py --size 10 --articles 10 --ingested-only
 """
 
 from __future__ import annotations
@@ -29,12 +34,37 @@ from eval._common import ts, write_jsonl
 from eval.eval_config import CANDIDATES_PATH, EVAL_GEN_MODEL, TESTSET_SIZE
 
 
-def _sample_articles(n: int, seed: int):
+def _ingested_urls() -> set[str]:
+    """Active article URLs already in the vector store, per data/metadata.db.
+
+    Needs the app's config/DB — only importable where `.venv` deps are on the path
+    (also true in `.venv-eval` since build_testset.py is not run in a separate
+    process from the app; only score_ragas.py's RAGAS deps are the risk)."""
+    from storage.metadata_db import MetadataDB
+
+    db = MetadataDB()
+    try:
+        return db.get_known_urls()
+    finally:
+        db.close()
+
+
+def _sample_articles(n: int, seed: int, ingested_only: bool = False):
     from ingestion.md_loader import load_corpus
 
     corpus = [a for a in load_corpus() if not a.is_stub and a.body_text.strip()]
     if not corpus:
         sys.exit("Corpus is empty or all stubs — check MD_CORPUS_DIR in .env")
+
+    if ingested_only:
+        known = _ingested_urls()
+        corpus = [a for a in corpus if a.url in known]
+        if not corpus:
+            sys.exit(
+                "--ingested-only but no corpus article matches an active row in "
+                "data/metadata.db — run scheduler/monthly_job.py --corpus [--limit N] first"
+            )
+        print(f"Restricted to {len(corpus)} already-ingested articles")
 
     corpus.sort(key=lambda a: (a.published_at is None, a.published_at))
     if n >= len(corpus):
@@ -100,13 +130,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--articles", type=int, default=40, help="articles to sample as source")
     ap.add_argument("--seed", type=int, default=7)
     ap.add_argument("--out", default=str(CANDIDATES_PATH))
+    ap.add_argument(
+        "--ingested-only",
+        action="store_true",
+        help="sample only articles already in data/metadata.db — use for a smoke test "
+        "against a partial corpus ingest (--limit N); omit for the real, full-corpus run",
+    )
     args = ap.parse_args(argv)
 
     from ragas.testset import TestsetGenerator
 
     from eval._common import build_ragas_embeddings, build_ragas_llm
 
-    articles = _sample_articles(args.articles, args.seed)
+    articles = _sample_articles(args.articles, args.seed, args.ingested_only)
     docs = _to_documents(articles)
 
     print(f"Generating {args.size} samples with judge={EVAL_GEN_MODEL} (local) …")
