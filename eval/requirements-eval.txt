@@ -8,9 +8,20 @@
 # No API SDKs — everything talks to local Ollama over the OpenAI-compatible API.
 
 ragas>=0.2,<0.3
+# ragas 0.2.x unconditionally imports langchain_community.chat_models.vertexai,
+# a deprecated shim module dropped in langchain-community 0.4 -> ModuleNotFoundError
+# if left unpinned.
+langchain-community>=0.3,<0.4
 datasets>=2.19
 langchain-openai>=0.1.7
 langchain-huggingface>=0.0.3
 sentence-transformers>=3.0
 rapidfuzz>=3.9
 python-dotenv>=1.0
+
+# build_testset.py imports the app's ingestion.md_loader and storage.metadata_db
+# directly (to sample real corpus articles / filter to already-ingested ones) —
+# these are their non-stdlib deps, kept in sync with requirements.txt.
+python-frontmatter>=1.1
+PyYAML>=6.0
+python-dateutil>=2.9
