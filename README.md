@@ -315,6 +315,24 @@ python app.py "..." --json
 
 ---
 
+## Evaluation (RAGAS)
+
+`eval/` scores retrieval (context precision/recall) and answering (faithfulness,
+answer relevancy, answer correctness) against a human-reviewed synthetic test set.
+Runs fully local (Ollama judge + local BGE embeddings) in its own virtualenv; a
+local judge makes the numbers **relative** — for comparing runs, not headline
+figures. Full workflow in [`eval/README.md`](eval/README.md).
+
+```bash
+python3 -m venv .venv-eval && .venv-eval/bin/pip install -r eval/requirements-eval.txt
+.venv-eval/bin/python eval/build_testset.py --size 60    # generate candidates
+.venv-eval/bin/python eval/review_testset.py             # accept/edit → frozen testset.jsonl
+.venv/bin/python      eval/run_system.py                 # run retrieve()+answer()
+.venv-eval/bin/python eval/score_ragas.py --results eval/results/run_<ts>.jsonl
+```
+
+---
+
 ## Development
 
 ```bash
@@ -340,4 +358,7 @@ toward a structured knowledge base:
    over time, so queries can traverse connections ("what has the author said about X's
    effect on Y?") rather than relying on chunk similarity alone. Retrieval becomes a hybrid
    of vector search and graph walks.
+
+Both steps are guarded by the RAGAS evaluation harness (see [Evaluation](#evaluation-ragas)) —
+retrieval and answer quality are tracked run-over-run so a change that regresses them is caught.
 

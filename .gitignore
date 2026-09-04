@@ -9,6 +9,12 @@ debug/
 # local corpus (input data, never source) — only matters if MD_CORPUS_DIR is inside the repo
 corpus/
 
+# evaluation harness — keep only the reviewed, frozen test set
+.venv-eval/
+eval/results/
+eval/dataset/candidates.jsonl
+eval/dataset/human_labels.jsonl
+
 # python
 __pycache__/
 *.py[cod]

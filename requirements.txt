@@ -45,6 +45,9 @@ apscheduler>=3.10
 tenacity>=8.2
 numpy>=1.26
 
+# Evaluation (RAGAS) — NOT installed here. Separate venv to avoid a langchain-core
+# clash with langchain-text-splitters:  see eval/requirements-eval.txt and eval/README.md
+
 # Dev / Test
 pytest>=8.0
 pytest-asyncio>=0.23

@@ -8,7 +8,7 @@ dynamic = ["dependencies"]
 [tool.setuptools]
 # Flat layout: modules and packages live at the repo root (see SPEC.md § Project directory tree).
 py-modules = ["app", "config", "logger", "models", "llm_provider"]
-packages = ["inbox", "scraper", "ingestion", "storage", "query", "scheduler"]
+packages = ["inbox", "scraper", "ingestion", "storage", "query", "scheduler", "eval"]
 
 [tool.setuptools.dynamic]
 dependencies = { file = ["requirements.txt"] }
@@ -34,7 +34,7 @@ select = [
 [tool.ruff.lint.isort]
 known-first-party = [
     "app", "config", "logger", "models", "llm_provider",
-    "inbox", "scraper", "ingestion", "storage", "query", "scheduler",
+    "inbox", "scraper", "ingestion", "storage", "query", "scheduler", "eval",
 ]
 
 # ── Pytest ────────────────────────────────────────────────────────────────────
@@ -48,7 +48,9 @@ markers = ["browser: uses real headless Chromium (slower)"]
 # ── Coverage (SPEC.md § Testing Strategy: 85% overall, 95% for the pure core) ──
 [tool.coverage.run]
 branch = true
-omit = ["tests/*", ".venv/*"]
+# eval/ is the RAGAS harness — operational tooling, verified by running it end to end
+# (eval/README.md), not by pytest; and score_ragas/build_testset need the .venv-eval deps.
+omit = ["tests/*", ".venv/*", "eval/*"]
 
 [tool.coverage.report]
 show_missing = true

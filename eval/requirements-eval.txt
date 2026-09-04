@@ -1,0 +1,16 @@
+# Dependencies for the RAGAS evaluation harness ONLY.
+# Install into a SEPARATE virtualenv so RAGAS's langchain-core pin cannot
+# collide with the app's langchain-text-splitters:
+#
+#     python3 -m venv .venv-eval
+#     .venv-eval/bin/pip install -r eval/requirements-eval.txt
+#
+# No API SDKs — everything talks to local Ollama over the OpenAI-compatible API.
+
+ragas>=0.2,<0.3
+datasets>=2.19
+langchain-openai>=0.1.7
+langchain-huggingface>=0.0.3
+sentence-transformers>=3.0
+rapidfuzz>=3.9
+python-dotenv>=1.0
