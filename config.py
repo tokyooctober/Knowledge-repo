@@ -83,14 +83,14 @@ DOWNLOAD_TIMEOUT_S = 30  # Phase 2 only
 MAX_IMAGES_PER_ARTICLE = 20
 
 # ── Text LLM (via llm_provider.py) ───────────────────────────────────────────
-LLM_BACKEND = "anthropic"  # "anthropic" | "openai" | "openai_compat"
-LLM_MODEL = "claude-sonnet-4-20250514"
-LLM_BASE_URL = None  # set URL for openai_compat
+LLM_BACKEND = "openai_compat"  # "anthropic" | "openai" | "openai_compat"
+LLM_MODEL = "qwen2.5:14b-instruct"
+LLM_BASE_URL = "http://localhost:11434/v1"  # set URL for openai_compat
 
 # ── Vision LLM (via llm_provider.py) ─────────────────────────────────────────
-VISION_BACKEND = "anthropic"  # "anthropic" | "openai" | "openai_compat"
-VISION_MODEL = "claude-sonnet-4-20250514"
-VISION_BASE_URL = None
+VISION_BACKEND = "openai_compat"  # "anthropic" | "openai" | "openai_compat"
+VISION_MODEL = "qwen2.5vl:7b"
+VISION_BASE_URL = "http://localhost:11434/v1"
 
 # ── Embedding (via llm_provider.py) ──────────────────────────────────────────
 EMBEDDING_BACKEND = "local"  # "local" | "openai" | "openai_compat"
