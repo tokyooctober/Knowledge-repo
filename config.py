@@ -21,6 +21,7 @@ MD_CORPUS_DIR = os.environ.get("MD_CORPUS_DIR", "corpus")  # *.md + images/
 MD_IMAGES_SUBDIR = "images"  # one subfolder per article inside
 PIPELINE_VERSION = 1  # bump when loader/chunker/transcriber semantics change;
 #                       stored per article, and a mismatch forces a re-ingest
+CORPUS_INGEST_BATCH_ARTICLES = 25  # articles per text/vision/store pass group
 
 # ── Phase 2: email reader ────────────────────────────────────────────────────
 EMAIL_BACKEND = "gmail"
@@ -80,7 +81,7 @@ MIN_IMAGE_PIXELS = 100  # min width and height
 TRANSCRIBE_TYPES = {"chart", "table", "diagram"}  # "photo" is skipped
 MAX_IMAGE_MB = 5
 DOWNLOAD_TIMEOUT_S = 30  # Phase 2 only
-MAX_IMAGES_PER_ARTICLE = 20
+MAX_IMAGES_PER_ARTICLE = 50
 
 # ── Text LLM (via llm_provider.py) ───────────────────────────────────────────
 LLM_BACKEND = "openai_compat"  # "anthropic" | "openai" | "openai_compat"

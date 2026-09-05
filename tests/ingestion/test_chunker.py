@@ -8,7 +8,7 @@ import logging
 from datetime import UTC, datetime
 
 import ingestion.chunker as ck
-from ingestion.chunker import chunk_article
+from ingestion.chunker import chunk_article, chunk_images, chunk_text, finalize_chunks
 from models import Article, ImageRef, ImageTranscription
 
 SENTENCE = "The money supply expanded sharply during the stimulus period and then contracted. "
@@ -192,3 +192,50 @@ def test_empty_body_and_no_tables_produces_nothing(caplog):
 def test_short_transcription_is_dropped():
     chunks = chunk_article(_article(), [_transcription("too short")])
     assert [c for c in chunks if c.content_type == "image_transcription"] == []
+
+
+# ── split entry points (chunk_text / chunk_images / finalize_chunks) ────────
+
+
+def test_chunk_text_yields_only_body_and_table_chunks():
+    art = _article(tables=[_TABLE])
+    chunks = chunk_text(art)
+    assert {c.content_type for c in chunks} == {"body", "table"}
+    assert all(c.total_chunks == 0 for c in chunks)  # not finalized yet
+
+
+def test_chunk_text_returns_empty_for_a_stub():
+    assert chunk_text(_article(is_stub=True)) == []
+
+
+def test_chunk_images_yields_only_image_chunks():
+    art = _article(tables=[_TABLE])
+    chunks = chunk_images(art, [_transcription(_TRANSCRIPT)])
+    assert {c.content_type for c in chunks} == {"image_transcription"}
+
+
+def test_chunk_images_returns_empty_for_a_stub_or_no_transcriptions():
+    assert chunk_images(_article(is_stub=True), [_transcription(_TRANSCRIPT)]) == []
+    assert chunk_images(_article()) == []
+
+
+def test_finalize_chunks_sets_total_and_logs(caplog):
+    art = _article(tables=[_TABLE])
+    chunks = chunk_text(art) + chunk_images(art, [_transcription(_TRANSCRIPT)])
+    with caplog.at_level(logging.INFO, logger="knowledge_repo.ingestion.chunker"):
+        out = finalize_chunks(art, chunks)
+    assert out is chunks
+    assert {c.total_chunks for c in chunks} == {len(chunks)}
+    assert any("Chunking complete" in r.message for r in caplog.records)
+
+
+def test_chunk_text_plus_chunk_images_matches_chunk_article():
+    art = _article(tables=[_TABLE])
+    transcriptions = [_transcription(_TRANSCRIPT)]
+
+    combined = finalize_chunks(art, chunk_text(art) + chunk_images(art, transcriptions))
+    direct = chunk_article(art, transcriptions)
+
+    assert [c.chunk_id for c in combined] == [c.chunk_id for c in direct]
+    assert [c.text for c in combined] == [c.text for c in direct]
+    assert [c.total_chunks for c in combined] == [c.total_chunks for c in direct]

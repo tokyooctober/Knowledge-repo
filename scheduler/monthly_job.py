@@ -2,16 +2,23 @@
 
 Mode 1 — corpus sync (Phase 1): load markdown from `MD_CORPUS_DIR`, ingest new and changed
 files, never remove anything (see `run_prune`). No browser, no mailbox, no credentials.
+Articles are processed in fixed-size batches (`CORPUS_INGEST_BATCH_ARTICLES`), each batch
+run through three passes so the embedding model and the vision model each load onto the
+GPU once per batch instead of alternating once per article:
+    Pass 1 (batch): stub guard -> is_changed -> chunk_text -> embed text chunks
+    Pass 2 (batch): transcribe images (vision only)
+    Pass 3 (batch): chunk_images -> embed image chunks -> delete_by_url (if replacing)
+                    -> vector_store.upsert -> metadata_db.upsert_article
+A batch's Pass 3 fully commits before the next batch's Pass 1 starts, so a crash mid-run
+only forces a redo of the in-flight batch — `is_changed` skips everything already committed
+on the next run.
 
 Mode 2 — email-triggered (Phase 2): `run_email_triggered` checks the mailbox for a new
 report, authenticates against the site (a human signs in when the session expires),
-scrapes the linked article, and ingests it. `start_scheduler` runs it on a cron + interval
-schedule.
+scrapes the linked article, and ingests it via the single-article `ingest_article` pipeline
+(batching doesn't help when there's only one article). `start_scheduler` runs it on a
+cron + interval schedule.
 
-The shared sub-pipeline `ingest_article` is the only place vectors are written:
-    stub guard -> is_changed -> transcribe -> chunk -> embed
-                -> delete_by_url (if replacing) -> vector_store.upsert
-                -> metadata_db.upsert_article
 `delete_by_url` before `upsert` is what stops a re-run from accumulating duplicate vectors.
 """
 
@@ -21,15 +28,17 @@ import argparse
 import asyncio
 import sys
 import time
+from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 
 # Allow `python scheduler/monthly_job.py` (not just `-m scheduler.monthly_job`).
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import MD_CORPUS_DIR
+from config import CORPUS_INGEST_BATCH_ARTICLES, MD_CORPUS_DIR
 from ingestion import md_loader
-from ingestion.chunker import chunk_article
+from ingestion.chunker import chunk_article, chunk_images, chunk_text, finalize_chunks
 from ingestion.embedder import embed_chunks
 from ingestion.image_transcriber import count_uncached, transcribe_images
 from llm_provider import get_embedding_provider
@@ -46,25 +55,39 @@ def _stats() -> dict:
     return dict(_EMPTY_STATS)
 
 
+def _batched(items: list, size: int):
+    it = iter(items)
+    while batch := list(islice(it, size)):
+        yield batch
+
+
 # ── shared sub-pipeline ─────────────────────────────────────────────────────
 
 
-async def ingest_article(
+@dataclass
+class _PendingArticle:
+    """Carries one article's state between the text, vision, and store passes."""
+
+    article: object
+    text_chunks: list
+    transcriptions: list | None = None
+    failed: bool = False
+
+
+def _ingest_text_phase(
     article,
-    context,
     stats: dict,
     run_id: str,
-    force: bool = False,
+    force: bool,
     *,
     db: MetadataDB,
-    store: VectorStore,
-) -> None:
-    """change check -> transcribe -> chunk -> embed -> store. Mutates `stats` in place.
-    `context` is None for corpus articles. Raises only on programmer error."""
+) -> _PendingArticle | None:
+    """stub guard -> is_changed -> chunk_text -> embed. Mutates `stats` in place.
+    Returns `None` when the article is skipped."""
     if article is None or article.is_stub:
         stats["skipped"] += 1
         log.warning("Article stub or load failed", extra={"run_id": run_id})
-        return
+        return None
 
     if not force and not db.is_changed(article.url, article.content_hash):
         db.update_last_scraped(article.url)
@@ -72,11 +95,28 @@ async def ingest_article(
             db.touch_source_path(article.url, article.source_path)
         stats["skipped"] += 1
         log.debug("Article unchanged — skipped", extra={"run_id": run_id, "url": article.url})
-        return
+        return None
 
-    transcriptions = await transcribe_images(article, context)
-    chunks = chunk_article(article, transcriptions)
-    embedded = embed_chunks(chunks)
+    text_chunks = chunk_text(article)
+    return _PendingArticle(article=article, text_chunks=embed_chunks(text_chunks))
+
+
+def _ingest_store_phase(
+    pending: _PendingArticle,
+    stats: dict,
+    run_id: str,
+    *,
+    db: MetadataDB,
+    store: VectorStore,
+) -> None:
+    """chunk_images -> embed -> merge -> delete_by_url (if replacing) -> upsert -> store.
+    Mutates `stats` in place."""
+    article = pending.article
+    image_chunks = chunk_images(article, pending.transcriptions)
+    embedded_images = embed_chunks(image_chunks)
+    chunks = [ec.chunk for ec in pending.text_chunks] + [ec.chunk for ec in embedded_images]
+    finalize_chunks(article, chunks)
+    embedded = pending.text_chunks + embedded_images
     model_name = embedded[0].model_name if embedded else get_embedding_provider().model_name
 
     existed = db.get_article(article.url) is not None
@@ -107,6 +147,26 @@ async def ingest_article(
     if embedded:
         store.upsert(embedded)
     db.upsert_article(article, len(chunks), model_name)
+
+
+async def ingest_article(
+    article,
+    context,
+    stats: dict,
+    run_id: str,
+    force: bool = False,
+    *,
+    db: MetadataDB,
+    store: VectorStore,
+) -> None:
+    """Single-article convenience wrapper: text phase -> transcribe -> store phase.
+    `context` is None for corpus articles. Used by Mode 2 (one article at a time), where
+    batching the text/vision work wouldn't help. Raises only on programmer error."""
+    pending = _ingest_text_phase(article, stats, run_id, force, db=db)
+    if pending is None:
+        return
+    pending.transcriptions = await transcribe_images(pending.article, context)
+    _ingest_store_phase(pending, stats, run_id, db=db, store=store)
 
 
 # ── corpus sync (Mode 1) ───────────────────────────────────────────────────
@@ -182,50 +242,136 @@ async def run_corpus_sync(
         if not dry_run:
             store = VectorStore()
 
-        for path in paths:
-            try:
-                article = md_loader.load_article(path)
-                if article is None:
+        total_batches = -(-len(paths) // CORPUS_INGEST_BATCH_ARTICLES) or 1  # ceil, min 1
+
+        for batch_num, batch_paths in enumerate(_batched(paths, CORPUS_INGEST_BATCH_ARTICLES), 1):
+            pending: list[_PendingArticle] = []
+            done_so_far = stats["new"] + stats["updated"] + stats["skipped"] + stats["failed"]
+            log.info(
+                f"Batch {batch_num}/{total_batches} starting ({len(batch_paths)} articles) — "
+                f"{done_so_far}/{len(paths)} files accounted for so far",
+                extra={
+                    "run_id": run_id,
+                    "batch": batch_num,
+                    "total_batches": total_batches,
+                    "batch_size": len(batch_paths),
+                    "files_done": done_so_far,
+                    "files_total": len(paths),
+                },
+            )
+
+            # Pass 1 — load + stub/is_changed guard + chunk text + embed text
+            for pos, path in enumerate(batch_paths, 1):
+                log.info(
+                    f"Batch {batch_num}/{total_batches} · pass 1/3 (text) · {pos}/{len(batch_paths)}",
+                    extra={
+                        "run_id": run_id,
+                        "batch": batch_num,
+                        "total_batches": total_batches,
+                        "pass": 1,
+                        "position": pos,
+                        "batch_size": len(batch_paths),
+                        "md_file": str(path),
+                    },
+                )
+                try:
+                    article = md_loader.load_article(path)
+                    if article is None:
+                        stats["failed"] += 1
+                        log.error(
+                            "Article could not be loaded",
+                            extra={"run_id": run_id, "md_file": str(path)},
+                        )
+                        continue
+
+                    if dry_run:
+                        status = (
+                            "new"
+                            if article.url not in known_urls
+                            else "changed"
+                            if db.is_changed(article.url, article.content_hash)
+                            else "unchanged"
+                        )
+                        projected["files"] += 1
+                        projected["images"] += len(article.images)
+                        projected["images_uncached"] += count_uncached(article.images)
+                        log.info(
+                            "DRY RUN — would ingest",
+                            extra={
+                                "run_id": run_id,
+                                "md_file": str(path),
+                                "url": article.url,
+                                "status": status,
+                                "word_count": article.word_count,
+                                "image_count": len(article.images),
+                            },
+                        )
+                        continue
+
+                    item = _ingest_text_phase(article, stats, run_id, force, db=db)
+                    if item is not None:
+                        pending.append(item)
+                except Exception:
                     stats["failed"] += 1
                     log.error(
-                        "Article could not be loaded",
+                        "Article ingestion failed",
                         extra={"run_id": run_id, "md_file": str(path)},
+                        exc_info=True,
                     )
                     continue
 
-                if dry_run:
-                    status = (
-                        "new"
-                        if article.url not in known_urls
-                        else "changed"
-                        if db.is_changed(article.url, article.content_hash)
-                        else "unchanged"
-                    )
-                    projected["files"] += 1
-                    projected["images"] += len(article.images)
-                    projected["images_uncached"] += count_uncached(article.images)
-                    log.info(
-                        "DRY RUN — would ingest",
-                        extra={
-                            "run_id": run_id,
-                            "md_file": str(path),
-                            "url": article.url,
-                            "status": status,
-                            "word_count": article.word_count,
-                            "image_count": len(article.images),
-                        },
-                    )
-                    continue
-
-                await ingest_article(article, None, stats, run_id, force, db=db, store=store)
-            except Exception:
-                stats["failed"] += 1
-                log.error(
-                    "Article ingestion failed",
-                    extra={"run_id": run_id, "md_file": str(path)},
-                    exc_info=True,
+            # Pass 2 — transcribe images (vision only) for the whole batch
+            for pos, item in enumerate(pending, 1):
+                log.info(
+                    f"Batch {batch_num}/{total_batches} · pass 2/3 (vision) · {pos}/{len(pending)}",
+                    extra={
+                        "run_id": run_id,
+                        "batch": batch_num,
+                        "total_batches": total_batches,
+                        "pass": 2,
+                        "position": pos,
+                        "batch_size": len(pending),
+                        "url": item.article.url,
+                    },
                 )
-                continue
+                try:
+                    item.transcriptions = await transcribe_images(item.article, None)
+                except Exception:
+                    item.failed = True
+                    stats["failed"] += 1
+                    log.error(
+                        "Article ingestion failed",
+                        extra={"run_id": run_id, "url": item.article.url},
+                        exc_info=True,
+                    )
+                    continue
+
+            # Pass 3 — embed image chunks + write to the store, per article
+            for pos, item in enumerate(pending, 1):
+                if item.failed:
+                    continue
+                log.info(
+                    f"Batch {batch_num}/{total_batches} · pass 3/3 (store) · {pos}/{len(pending)}",
+                    extra={
+                        "run_id": run_id,
+                        "batch": batch_num,
+                        "total_batches": total_batches,
+                        "pass": 3,
+                        "position": pos,
+                        "batch_size": len(pending),
+                        "url": item.article.url,
+                    },
+                )
+                try:
+                    _ingest_store_phase(item, stats, run_id, db=db, store=store)
+                except Exception:
+                    stats["failed"] += 1
+                    log.error(
+                        "Article ingestion failed",
+                        extra={"run_id": run_id, "url": item.article.url},
+                        exc_info=True,
+                    )
+                    continue
 
         if dry_run:
             log.info("DRY RUN — projected cost", extra={"run_id": run_id, **projected})

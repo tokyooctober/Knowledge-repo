@@ -54,16 +54,8 @@ def _token_count(text: str) -> int:
     return len(tiktoken.get_encoding(TOKENIZER).encode(text))
 
 
-def chunk_article(
-    article: Article,
-    image_transcriptions: list[ImageTranscription] | None = None,
-) -> list[Chunk]:
-    """Body + table + image-transcription chunks for one article.
-
-    Returns [] for a stub. `image_transcriptions=None` yields only body + table chunks.
-    All chunks share `total_chunks`; `chunk_index` is 0-based within each content-type
-    group and contiguous (skipped items leave no gap).
-    """
+def chunk_text(article: Article) -> list[Chunk]:
+    """Body + table chunks only (no image transcriptions). [] for a stub."""
     if article.is_stub:
         log.debug(
             "Skipping stub article",
@@ -76,12 +68,23 @@ def chunk_article(
         "Body text chunking started",
         extra={"url": article.url, "body_length_chars": len(article.body_text)},
     )
+    return _body_chunks(article, url_hash) + _table_chunks(article, url_hash)
 
-    chunks: list[Chunk] = []
-    chunks += _body_chunks(article, url_hash)
-    chunks += _table_chunks(article, url_hash)
-    chunks += _image_chunks(article, url_hash, image_transcriptions or [])
 
+def chunk_images(
+    article: Article,
+    image_transcriptions: list[ImageTranscription] | None = None,
+) -> list[Chunk]:
+    """Image-transcription chunks only. [] for a stub or when there are none."""
+    if article.is_stub:
+        return []
+    url_hash = sha256(article.url.encode()).hexdigest()[:8]
+    return _image_chunks(article, url_hash, image_transcriptions or [])
+
+
+def finalize_chunks(article: Article, chunks: list[Chunk]) -> list[Chunk]:
+    """Set the shared `total_chunks` across a full (text + image) chunk list and log the
+    summary. Call once after `chunk_text` and `chunk_images` results are merged."""
     if not chunks:
         log.warning("All chunks filtered — article produced nothing", extra={"url": article.url})
 
@@ -103,6 +106,26 @@ def chunk_article(
         },
     )
     return chunks
+
+
+def chunk_article(
+    article: Article,
+    image_transcriptions: list[ImageTranscription] | None = None,
+) -> list[Chunk]:
+    """Body + table + image-transcription chunks for one article.
+
+    Returns [] for a stub. `image_transcriptions=None` yields only body + table chunks.
+    All chunks share `total_chunks`; `chunk_index` is 0-based within each content-type
+    group and contiguous (skipped items leave no gap).
+    """
+    if article.is_stub:
+        log.debug(
+            "Skipping stub article",
+            extra={"url": article.url, "word_count": article.word_count},
+        )
+        return []
+    chunks = chunk_text(article) + chunk_images(article, image_transcriptions)
+    return finalize_chunks(article, chunks)
 
 
 def _make(article: Article, url_hash: str, content_type: str, index: int, text: str) -> Chunk:

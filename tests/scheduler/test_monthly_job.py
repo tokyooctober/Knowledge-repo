@@ -489,16 +489,71 @@ def test_cli_reset_needs_yes_non_tty(env, monkeypatch, capsys):
 # ── error paths ────────────────────────────────────────────────────────────
 
 
-async def test_a_failure_inside_ingest_article_is_caught_and_counted(env, monkeypatch):
+async def test_a_failure_in_the_text_pass_is_caught_and_counted(env, monkeypatch):
+    _write(env.corpus, "a")
+    _write(env.corpus, "b")
+
+    def boom(*a, **k):
+        raise RuntimeError("embedding exploded")
+
+    monkeypatch.setattr(mj, "_ingest_text_phase", boom)
+    stats = await mj.run_corpus_sync(str(env.corpus))
+    assert stats["failed"] == 2 and stats["new"] == 0  # both failed, run finished
+
+
+async def test_a_failure_in_the_vision_pass_is_caught_and_counted(env, monkeypatch):
     _write(env.corpus, "a")
     _write(env.corpus, "b")
 
     async def boom(*a, **k):
-        raise RuntimeError("embedding exploded")
+        raise RuntimeError("vision exploded")
 
-    monkeypatch.setattr(mj, "ingest_article", boom)
+    monkeypatch.setattr(mj, "transcribe_images", boom)
     stats = await mj.run_corpus_sync(str(env.corpus))
     assert stats["failed"] == 2 and stats["new"] == 0  # both failed, run finished
+
+
+async def test_a_failure_in_the_store_pass_is_caught_and_counted(env, monkeypatch):
+    _write(env.corpus, "a")
+    _write(env.corpus, "b")
+
+    def boom(*a, **k):
+        raise RuntimeError("store exploded")
+
+    monkeypatch.setattr(mj, "_ingest_store_phase", boom)
+    stats = await mj.run_corpus_sync(str(env.corpus))
+    assert stats["failed"] == 2 and stats["new"] == 0  # both failed, run finished
+
+
+async def test_a_batch_boundary_bounds_a_crash_to_the_in_flight_batch(env, monkeypatch):
+    """A failure partway through the second batch's vision pass must not touch articles
+    already committed by the first batch — and a re-run should skip those via is_changed."""
+    monkeypatch.setattr(mj, "CORPUS_INGEST_BATCH_ARTICLES", 2)
+    for stem in ("a", "b", "c", "d"):
+        _write(env.corpus, stem)
+
+    real_transcribe = it_mod.transcribe_images
+    calls = {"n": 0}
+
+    async def flaky(article, context):
+        calls["n"] += 1
+        if calls["n"] == 3:  # first article of the second batch
+            raise RuntimeError("vision exploded")
+        return await real_transcribe(article, context)
+
+    monkeypatch.setattr(mj, "transcribe_images", flaky)
+    stats = await mj.run_corpus_sync(str(env.corpus))
+
+    db = MetadataDB(str(env.db_file))
+    assert db.get_article("https://example.com/a") is not None
+    assert db.get_article("https://example.com/b") is not None
+    assert db.get_article("https://example.com/c") is None
+    db.close()
+    assert stats["new"] == 3 and stats["failed"] == 1  # a, b, d committed; c failed
+
+    monkeypatch.setattr(mj, "transcribe_images", real_transcribe)
+    second = await mj.run_corpus_sync(str(env.corpus))
+    assert second == {"new": 1, "updated": 0, "skipped": 3, "failed": 0}  # only c was missing
 
 
 async def test_a_top_level_crash_still_finishes_the_run_row_and_reraises(env, monkeypatch):
