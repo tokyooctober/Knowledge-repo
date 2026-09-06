@@ -136,8 +136,17 @@ def main(argv: list[str] | None = None) -> int:
         help="sample only articles already in data/metadata.db — use for a smoke test "
         "against a partial corpus ingest (--limit N); omit for the real, full-corpus run",
     )
+    ap.add_argument(
+        "--max-workers",
+        type=int,
+        default=4,
+        help="concurrent RAGAS transformation calls (default 16 in ragas — fewer avoids "
+        "a memory spike from that many concurrent local-embedding + LLM calls at once "
+        "when HeadlinesExtractor/etc. start; lower is safer, higher is faster)",
+    )
     args = ap.parse_args(argv)
 
+    from ragas.run_config import RunConfig
     from ragas.testset import TestsetGenerator
 
     from eval._common import build_ragas_embeddings, build_ragas_llm
@@ -145,12 +154,15 @@ def main(argv: list[str] | None = None) -> int:
     articles = _sample_articles(args.articles, args.seed, args.ingested_only)
     docs = _to_documents(articles)
 
-    print(f"Generating {args.size} samples with judge={EVAL_GEN_MODEL} (local) …")
+    provider = "anthropic" if EVAL_GEN_MODEL.startswith("claude-") else "local"
+    print(f"Generating {args.size} samples with judge={EVAL_GEN_MODEL} ({provider}) …")
     generator = TestsetGenerator(
         llm=build_ragas_llm(EVAL_GEN_MODEL),
         embedding_model=build_ragas_embeddings(),
     )
-    dataset = generator.generate_with_langchain_docs(docs, testset_size=args.size)
+    dataset = generator.generate_with_langchain_docs(
+        docs, testset_size=args.size, run_config=RunConfig(max_workers=args.max_workers)
+    )
 
     rows = []
     for i, sample in enumerate(dataset.to_list()):

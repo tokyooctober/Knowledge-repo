@@ -62,8 +62,58 @@ def _json_default(obj: Any) -> Any:
 # ── RAGAS model wrappers (import only inside .venv-eval) ─────────────────────
 
 
+class _NoSamplingChatAnthropic:
+    """Mixin: strip temperature/top_k/top_p from every outgoing request.
+
+    RAGAS's LangchainLLMWrapper.generate() unconditionally does
+    `self.langchain_llm.temperature = 1e-8` (any small positive value) before every
+    call, on any langchain_llm that has a `temperature` attribute — it has no idea
+    Opus 5 / Sonnet 5 reject sampling params outright now that thinking replaces them
+    (400 "temperature is deprecated for this model"). langchain_anthropic doesn't drop
+    these for Opus 5 / Sonnet 5 — with `anthropic>=1` installed, its own
+    `_route_unsupported_sampling_params` *relocates* them into `payload["extra_body"]`
+    instead (the SDK's escape hatch, kept for older models that still accept them via
+    that path), so popping the top-level keys alone is a no-op. Strip both places.
+    """
+
+    def _get_request_payload(self, *args, **kwargs):
+        payload = super()._get_request_payload(*args, **kwargs)  # type: ignore[misc]
+        for key in ("temperature", "top_k", "top_p"):
+            payload.pop(key, None)
+        extra_body = payload.get("extra_body")
+        if isinstance(extra_body, dict):
+            for key in ("temperature", "top_k", "top_p"):
+                extra_body.pop(key, None)
+            if not extra_body:
+                payload.pop("extra_body", None)
+        return payload
+
+
 def build_chat_llm(model: str):
-    """A langchain ChatOpenAI bound to the local Ollama endpoint."""
+    """A langchain chat model for `model`.
+
+    Routes to Anthropic (reads `ANTHROPIC_API_KEY`) when `model` is a Claude model id
+    (starts with "claude-"); otherwise a ChatOpenAI bound to the local Ollama endpoint.
+    Same routing for EVAL_GEN_MODEL and EVAL_JUDGE_MODEL — either can be a Claude model
+    independently of the other. See eval/README.md "Using the Anthropic API".
+    """
+    if model.startswith("claude-"):
+        from langchain_anthropic import ChatAnthropic
+
+        class _ChatAnthropicNoSampling(_NoSamplingChatAnthropic, ChatAnthropic):
+            pass
+
+        # Thinking explicitly disabled — RAGAS expects `.content` as a plain string;
+        # with thinking on, a model may return a content-block list (thinking + text)
+        # instead, and whether that happens is prompt-dependent (Opus 5 did on a
+        # trivial prompt, Sonnet 5 didn't) — disabling it removes that variability.
+        return _ChatAnthropicNoSampling(
+            model=model,
+            thinking={"type": "disabled"},
+            timeout=EVAL_LLM_TIMEOUT,
+            max_retries=2,
+        )
+
     from langchain_openai import ChatOpenAI
 
     return ChatOpenAI(

@@ -5,7 +5,9 @@
 #     python3 -m venv .venv-eval
 #     .venv-eval/bin/pip install -r eval/requirements-eval.txt
 #
-# No API SDKs — everything talks to local Ollama over the OpenAI-compatible API.
+# Everything talks to local Ollama over the OpenAI-compatible API by default.
+# langchain-anthropic is optional — only needed if EVAL_GEN_MODEL / EVAL_JUDGE_MODEL is
+# set to a Claude model id (see eval/README.md "Using the Anthropic API").
 
 ragas>=0.2,<0.3
 # ragas 0.2.x unconditionally imports langchain_community.chat_models.vertexai,
@@ -14,6 +16,7 @@ ragas>=0.2,<0.3
 langchain-community>=0.3,<0.4
 datasets>=2.19
 langchain-openai>=0.1.7
+langchain-anthropic>=0.3
 langchain-huggingface>=0.0.3
 sentence-transformers>=3.0
 rapidfuzz>=3.9

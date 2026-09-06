@@ -3,9 +3,11 @@
 Measures **retrieval** (context precision/recall) and **answering** (faithfulness,
 answer relevancy, answer correctness) of the RAG pipeline.
 
-Everything runs against local Ollama — no API keys. A local ~14B judge is noisier
-than a GPT-4-class one, so **treat every score as relative**: compare runs and
-catch regressions, don't publish an absolute "faithfulness = 0.82".
+Everything runs against local Ollama by default — no API keys. A local ~14B judge is
+noisier than a frontier one, so **treat every score as relative**: compare runs and
+catch regressions, don't publish an absolute "faithfulness = 0.82". `EVAL_GEN_MODEL`
+and `EVAL_JUDGE_MODEL` can each independently point at a Claude model instead — see
+[Using the Anthropic API](#using-the-anthropic-api-instead-of-a-local-judge) below.
 
 ## Why two virtualenvs
 
@@ -114,6 +116,103 @@ that agrees best with you:
 .venv-eval/bin/python eval/calibrate_judge.py --judges qwen2.5:14b-instruct,phi4,mistral-small
 # prints combined agreement per model; set EVAL_JUDGE_MODEL in .env to the winner
 ```
+
+## Using the Anthropic API instead of a local judge
+
+`EVAL_GEN_MODEL` and `EVAL_JUDGE_MODEL` each accept a Claude model id
+(`build_chat_llm` in `eval/_common.py` routes any model starting with `claude-` to
+Anthropic instead of Ollama) — no new env vars, same `--judge-model` /
+`--judges` flags as the local models above. This is worth it where a noisy local
+judge actively hurts you: generating the frozen test set (a bad reference answer
+or reference context poisons every future score, since everything downstream is
+graded against it), and scoring, where a Claude judge removes the "treat every
+score as relative" caveat and makes runs comparable over time even as you swap
+local models.
+
+### Recommendation
+
+| role | model | why |
+|---|---|---|
+| `EVAL_GEN_MODEL` (test-set writer) | `claude-opus-5` | one-time cost; this output is frozen and graded against forever, so quality here has the highest leverage in the whole harness |
+| `EVAL_JUDGE_MODEL` (scorer) | `claude-sonnet-5` | runs on every `score_ragas.py` pass, so cost compounds; Sonnet's judgment on a defined rubric (faithfulness, correctness) is normally enough, at ~2.5x lower cost than Opus 5 ($2/$10 vs $5/$25 per MTok in/out) |
+| `EVAL_EMBEDDING_MODEL` | leave local (`BAAI/bge-large-en-v1.5`) | Anthropic has no embeddings endpoint, and this must match the app's own index (`LOCAL_EMBEDDING_MODEL` in `config.py`) regardless |
+
+Don't take the Sonnet-vs-Opus judge call on faith — run
+[Let calibration make the call](#let-calibration-make-the-call) with both against
+your ~15 hand-labelled rows (`--judges qwen2.5:14b-instruct,claude-sonnet-5,claude-opus-5`)
+and keep whichever actually agrees best with you; if Sonnet 5 and Opus 5 land within
+noise of each other, use Sonnet 5 for the recurring judge role.
+
+At this harness's scale (tens of articles, a 60-row test set, 5 metrics x 2 passes
+per score run) a full run costs low single-digit dollars even at Opus pricing — this
+isn't a batch-processing volume where the per-token rate dominates. Check actual spend
+after your first run in the [Console usage page](https://console.anthropic.com/settings/usage)
+rather than estimating up front.
+
+### Exact steps
+
+1. **Install the Anthropic LangChain integration** into `.venv-eval` (added to
+   `requirements-eval.txt`; already there if you re-ran the one-time setup):
+
+   ```bash
+   .venv-eval/bin/pip install -r eval/requirements-eval.txt
+   ```
+
+2. **Set `ANTHROPIC_API_KEY`.** If you already run the app itself with
+   `LLM_BACKEND=anthropic` or `VISION_BACKEND=anthropic`, it's already in `.env` and
+   nothing more is needed here — `eval/_common.py` reads the same env var. Otherwise
+   add it to `.env`:
+
+   ```bash
+   # .env
+   ANTHROPIC_API_KEY=sk-ant-...
+   ```
+
+3. **Point the harness at Claude** — persistent in `.env`, or inline per invocation
+   like the local-model examples above:
+
+   ```bash
+   # .env
+   EVAL_GEN_MODEL=claude-opus-5
+   EVAL_JUDGE_MODEL=claude-sonnet-5
+   ```
+
+   or for one run only, no `.env` edit:
+
+   ```bash
+   EVAL_JUDGE_MODEL=claude-sonnet-5 \
+     .venv-eval/bin/python eval/score_ragas.py --results eval/results/run_<ts>.jsonl
+   # or: --judge-model claude-sonnet-5 on the command line, no env edit needed
+   ```
+
+4. **Verify the key works and routing is correct** (mirrors the local-model verify
+   snippet above — same helper, different model id):
+
+   ```bash
+   .venv-eval/bin/python -c "from eval._common import build_chat_llm; \
+     print(build_chat_llm('claude-sonnet-5').invoke('reply OK').content)"
+   ```
+
+5. **Build (or rebuild) the frozen test set with the Claude generator**, then review
+   it exactly as in [Build the test set](#build-the-test-set-once-then-freeze) —
+   generation quality doesn't change what `review_testset.py` does, only how much you
+   have to edit/reject:
+
+   ```bash
+   .venv-eval/bin/python eval/build_testset.py --size 60 --articles 40 --seed 7
+   .venv-eval/bin/python eval/review_testset.py
+   ```
+
+6. **Score as usual** — `score_ragas.py` and `calibrate_judge.py` don't need any
+   changes; the model id alone decides the provider:
+
+   ```bash
+   .venv-eval/bin/python eval/score_ragas.py --results eval/results/run_<ts>.jsonl
+   ```
+
+Everything in [What each role actually affects](#what-each-role-actually-affects)
+still applies — a Claude judge's scores are still not comparable to a local judge's
+past scores; re-score anything you want to compare against with the new judge.
 
 ## Smoke test on a partial ingest
 
