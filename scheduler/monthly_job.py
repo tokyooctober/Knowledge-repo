@@ -263,7 +263,8 @@ async def run_corpus_sync(
             # Pass 1 — load + stub/is_changed guard + chunk text + embed text
             for pos, path in enumerate(batch_paths, 1):
                 log.info(
-                    f"Batch {batch_num}/{total_batches} · pass 1/3 (text) · {pos}/{len(batch_paths)}",
+                    f"Batch {batch_num}/{total_batches} · pass 1/3 (text) · "
+                    f"{pos}/{len(batch_paths)} · {path.name}",
                     extra={
                         "run_id": run_id,
                         "batch": batch_num,
@@ -322,8 +323,12 @@ async def run_corpus_sync(
 
             # Pass 2 — transcribe images (vision only) for the whole batch
             for pos, item in enumerate(pending, 1):
+                file_name = (
+                    Path(item.article.source_path).name if item.article.source_path else None
+                )
                 log.info(
-                    f"Batch {batch_num}/{total_batches} · pass 2/3 (vision) · {pos}/{len(pending)}",
+                    f"Batch {batch_num}/{total_batches} · pass 2/3 (vision) · "
+                    f"{pos}/{len(pending)} · {file_name}",
                     extra={
                         "run_id": run_id,
                         "batch": batch_num,
@@ -332,6 +337,7 @@ async def run_corpus_sync(
                         "position": pos,
                         "batch_size": len(pending),
                         "url": item.article.url,
+                        "md_file": file_name,
                     },
                 )
                 try:
@@ -350,8 +356,12 @@ async def run_corpus_sync(
             for pos, item in enumerate(pending, 1):
                 if item.failed:
                     continue
+                file_name = (
+                    Path(item.article.source_path).name if item.article.source_path else None
+                )
                 log.info(
-                    f"Batch {batch_num}/{total_batches} · pass 3/3 (store) · {pos}/{len(pending)}",
+                    f"Batch {batch_num}/{total_batches} · pass 3/3 (store) · "
+                    f"{pos}/{len(pending)} · {file_name}",
                     extra={
                         "run_id": run_id,
                         "batch": batch_num,
@@ -360,6 +370,7 @@ async def run_corpus_sync(
                         "position": pos,
                         "batch_size": len(pending),
                         "url": item.article.url,
+                        "md_file": file_name,
                     },
                 )
                 try:
