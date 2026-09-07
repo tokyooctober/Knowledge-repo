@@ -1,0 +1,16 @@
+# Config for `streamlit run app.py`. Does not affect `python app.py "question"`.
+
+[server]
+# transformers 5.x puts ~218 lazy `image_processing_*` placeholders in sys.modules.
+# Streamlit's LocalSourcesWatcher walks sys.modules after every script run and calls
+# hasattr(m, "__path__") on each, which forces a real import — 101 of them import
+# torchvision, which this project deliberately does not install (no local vision
+# work; vision goes through the Anthropic API). Before this setting: 101 tracebacks
+# and ~4.2 s of failed imports on every rerun, burying the app's own logs.
+#
+# "none" is the only value that helps — "poll" changes the watch backend but still
+# walks sys.modules.
+#
+# Cost: editing source no longer auto-reloads the browser. While developing, run:
+#     streamlit run app.py --server.fileWatcherType auto
+fileWatcherType = "none"

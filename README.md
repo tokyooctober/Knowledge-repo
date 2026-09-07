@@ -313,6 +313,20 @@ python app.py "What are the author's views on monetary policy?"
 python app.py "..." --json
 ```
 
+`.streamlit/config.toml` turns Streamlit's file watcher off
+(`server.fileWatcherType = "none"`). Streamlit otherwise walks `sys.modules` after
+every rerun and calls `hasattr(m, "__path__")` on each entry, which forces real
+imports of `transformers`' ~218 lazy `image_processing_*` modules — 101 of them
+import `torchvision`, which this project does not install and does not need (vision
+goes through the Anthropic API). Left on, that is ~101 tracebacks and ~4 s of failed
+imports on **every** button click, burying the app's own log output. It is noise,
+not a failure: the answer is already rendered by the time it appears. Don't "fix" it
+by installing torchvision. To get auto-reload back while editing source:
+
+```bash
+streamlit run app.py --server.fileWatcherType auto
+```
+
 ---
 
 ## Evaluation (RAGAS)

@@ -1,5 +1,7 @@
 # secrets & runtime state
 .env
+# only secrets — .streamlit/config.toml IS tracked
+.streamlit/secrets.toml
 session/
 logs/
 data/
