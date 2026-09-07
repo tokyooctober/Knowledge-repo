@@ -89,13 +89,28 @@ class _NoSamplingChatAnthropic:
         return payload
 
 
+_OPENAI_MODEL_PREFIXES = ("gpt-", "chatgpt-", "o1-", "o1", "o3-", "o3", "o4-", "o4")
+
+
 def build_chat_llm(model: str):
     """A langchain chat model for `model`.
 
     Routes to Anthropic (reads `ANTHROPIC_API_KEY`) when `model` is a Claude model id
-    (starts with "claude-"); otherwise a ChatOpenAI bound to the local Ollama endpoint.
-    Same routing for EVAL_GEN_MODEL and EVAL_JUDGE_MODEL — either can be a Claude model
-    independently of the other. See eval/README.md "Using the Anthropic API".
+    (starts with "claude-"); to the real OpenAI API (reads `OPENAI_API_KEY`) when it's
+    an OpenAI model id (gpt-*, o1/o3/o4*); to OpenRouter (reads `OPENROUTER_API_KEY`)
+    when the id contains a "/" (OpenRouter's "<provider>/<model>" convention, e.g.
+    "openai/gpt-4o", "anthropic/claude-3.5-sonnet" — lets you pick the provider per
+    role without a code change, at OpenRouter's markup); otherwise a ChatOpenAI bound
+    to the local Ollama endpoint (EVAL_BASE_URL/EVAL_API_KEY). Same routing for
+    EVAL_GEN_MODEL and EVAL_JUDGE_MODEL — each can be a different provider
+    independently. See eval/README.md "Using the Anthropic API" / "Using the OpenAI
+    API" / "Using OpenRouter".
+
+    Caveat: the "/" check assumes you don't also point EVAL_GEN_MODEL/EVAL_JUDGE_MODEL
+    at a locally-pulled Ollama model named with a "/" (e.g. a custom `ollama pull
+    hf.co/<user>/<repo>` GGUF) — that would be misrouted to OpenRouter instead. Not a
+    concern for the model names this harness ships with (qwen2.5:14b-instruct, phi4,
+    mistral-small, …), none of which contain "/".
     """
     if model.startswith("claude-"):
         from langchain_anthropic import ChatAnthropic
@@ -110,6 +125,53 @@ def build_chat_llm(model: str):
         return _ChatAnthropicNoSampling(
             model=model,
             thinking={"type": "disabled"},
+            timeout=EVAL_LLM_TIMEOUT,
+            max_retries=2,
+        )
+
+    if model.startswith(_OPENAI_MODEL_PREFIXES):
+        import os
+
+        from langchain_openai import ChatOpenAI
+
+        api_key = os.environ.get("OPENAI_API_KEY", "")
+        if not api_key or api_key.startswith("sk-...") or api_key == "...":
+            raise RuntimeError(
+                f"model={model!r} looks like an OpenAI model id but OPENAI_API_KEY in "
+                ".env is missing or still the placeholder — set it to a real key first."
+            )
+        # No base_url override: langchain_openai's own default already points at
+        # https://api.openai.com/v1 — EVAL_BASE_URL stays reserved for the local
+        # Ollama branch below so switching one judge/gen model to OpenAI can't
+        # accidentally redirect the other one away from Ollama.
+        return ChatOpenAI(
+            model=model,
+            api_key=api_key,
+            temperature=0.0,
+            timeout=EVAL_LLM_TIMEOUT,
+            max_retries=2,
+        )
+
+    if "/" in model:
+        import os
+
+        from langchain_openai import ChatOpenAI
+
+        api_key = os.environ.get("OPENROUTER_API_KEY", "")
+        if not api_key or api_key in ("sk-...", "..."):
+            raise RuntimeError(
+                f"model={model!r} looks like an OpenRouter model id (contains '/') "
+                "but OPENROUTER_API_KEY in .env is missing or a placeholder — get one "
+                "at https://openrouter.ai/keys and set it first."
+            )
+        # Own base_url, not EVAL_BASE_URL — that stays reserved for the local Ollama
+        # branch below so this role can point at OpenRouter without redirecting the
+        # other role's local traffic away from Ollama.
+        return ChatOpenAI(
+            model=model,
+            base_url="https://openrouter.ai/api/v1",
+            api_key=api_key,
+            temperature=0.0,
             timeout=EVAL_LLM_TIMEOUT,
             max_retries=2,
         )

@@ -13,13 +13,16 @@ Then:
     .venv-eval/bin/python eval/calibrate_judge.py --judges qwen2.5:14b-instruct,phi4
 
 For each judge it runs RAGAS faithfulness + answer_correctness over the labelled
-rows and prints agreement@0.5 and Pearson r vs the human columns. Set
-EVAL_JUDGE_MODEL in .env to the winner.
+rows, prints agreement@0.5 and Pearson r vs the human columns, and writes:
+    eval/results/calibration_<ts>.json   full per-judge scores
+    eval/results/calibration_<ts>.md     human-readable summary table
+Set EVAL_JUDGE_MODEL in .env to the winner.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import statistics
 import sys
 from pathlib import Path
@@ -27,8 +30,8 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from eval._common import read_jsonl
-from eval.eval_config import HUMAN_LABELS_PATH
+from eval._common import read_jsonl, ts
+from eval.eval_config import HUMAN_LABELS_PATH, RESULTS_DIR
 
 
 def _pearson(xs: list[float], ys: list[float]) -> float | None:
@@ -47,8 +50,16 @@ def _agreement(pred: list[float], human: list[int], thresh: float = 0.5) -> floa
 
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="calibrate_judge")
-    ap.add_argument("--judges", required=True, help="comma-separated Ollama model names")
+    ap.add_argument("--judges", required=True, help="comma-separated model ids to compare")
     ap.add_argument("--labels", default=str(HUMAN_LABELS_PATH))
+    ap.add_argument(
+        "--max-workers",
+        type=int,
+        default=4,
+        help="concurrent RAGAS judge calls — see score_ragas.py --max-workers help; "
+        "a local Ollama judge serves one generation at a time, so keep this low for "
+        "those and raise it only for a real API judge (gpt-4o, openai/*, claude-*)",
+    )
     args = ap.parse_args(argv)
 
     rows = read_jsonl(args.labels)
@@ -72,9 +83,10 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"{len(rows)} labelled rows · judges: {args.judges}\n")
     best = None
+    per_judge = []
     for judge in [j.strip() for j in args.judges.split(",") if j.strip()]:
         print(f"── {judge} ──")
-        out = _evaluate_once(dataset, metrics, judge)
+        out = _evaluate_once(dataset, metrics, judge, max_workers=args.max_workers)
         per = out["per_row"]
         faith = [float(x.get("faithfulness", 0) or 0) for x in per]
         corr = [float(x.get("answer_correctness", 0) or 0) for x in per]
@@ -87,12 +99,56 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  faithfulness   agree@0.5={a_faith}  pearson_r={r_faith}")
         print(f"  answer_correct agree@0.5={a_ok}  pearson_r={r_ok}")
         print(f"  combined agreement = {score:.3f}\n")
+        per_judge.append(
+            {
+                "judge": judge,
+                "faithfulness": {"agree_at_0.5": a_faith, "pearson_r": r_faith},
+                "answer_correctness": {"agree_at_0.5": a_ok, "pearson_r": r_ok},
+                "combined_agreement": round(score, 3),
+            }
+        )
         if best is None or score > best[1]:
             best = (judge, score)
 
     print(f"→ best judge: {best[0]}  (combined agreement {best[1]:.3f})")
     print(f"  set it:  echo 'EVAL_JUDGE_MODEL={best[0]}' >> .env")
+
+    stamp = ts()
+    payload = {
+        "labels_file": args.labels,
+        "scored_at": stamp,
+        "n_rows": len(rows),
+        "judges": per_judge,
+        "best_judge": best[0],
+        "best_combined_agreement": round(best[1], 3),
+    }
+    json_path = Path(RESULTS_DIR) / f"calibration_{stamp}.json"
+    json_path.write_text(json.dumps(payload, indent=2))
+
+    md_path = Path(RESULTS_DIR) / f"calibration_{stamp}.md"
+    md_path.write_text(_summary_md(payload))
+
+    print(f"\nwrote {json_path}\n      {md_path}")
     return 0
+
+
+def _summary_md(p: dict) -> str:
+    lines = [
+        f"# Judge calibration — {p['scored_at']}",
+        "",
+        f"- labels: `{p['labels_file']}` ({p['n_rows']} rows)",
+        f"- **best judge: `{p['best_judge']}`** (combined agreement {p['best_combined_agreement']})",
+        "",
+        "| judge | faithfulness agree@0.5 | faithfulness r | answer_correctness agree@0.5 | answer_correctness r | combined |",
+        "|---|---|---|---|---|---|",
+    ]
+    for j in p["judges"]:
+        f_, c_ = j["faithfulness"], j["answer_correctness"]
+        lines.append(
+            f"| `{j['judge']}` | {f_['agree_at_0.5']} | {f_['pearson_r']} | "
+            f"{c_['agree_at_0.5']} | {c_['pearson_r']} | {j['combined_agreement']} |"
+        )
+    return "\n".join(lines) + "\n"
 
 
 if __name__ == "__main__":

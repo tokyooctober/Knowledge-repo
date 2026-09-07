@@ -6,8 +6,11 @@ answer relevancy, answer correctness) of the RAG pipeline.
 Everything runs against local Ollama by default — no API keys. A local ~14B judge is
 noisier than a frontier one, so **treat every score as relative**: compare runs and
 catch regressions, don't publish an absolute "faithfulness = 0.82". `EVAL_GEN_MODEL`
-and `EVAL_JUDGE_MODEL` can each independently point at a Claude model instead — see
-[Using the Anthropic API](#using-the-anthropic-api-instead-of-a-local-judge) below.
+and `EVAL_JUDGE_MODEL` can each independently point at a Claude or OpenAI model
+instead, or route through OpenRouter to pick from either (or others) — see
+[Using the Anthropic API](#using-the-anthropic-api-instead-of-a-local-judge),
+[Using the OpenAI API](#using-the-openai-api-instead), or
+[Using OpenRouter](#using-openrouter) below.
 
 ## Why two virtualenvs
 
@@ -213,6 +216,97 @@ rather than estimating up front.
 Everything in [What each role actually affects](#what-each-role-actually-affects)
 still applies — a Claude judge's scores are still not comparable to a local judge's
 past scores; re-score anything you want to compare against with the new judge.
+
+## Using the OpenAI API instead
+
+If Anthropic access isn't available to you (key rotation, billing, workspace scoping —
+whatever the reason), `EVAL_GEN_MODEL` / `EVAL_JUDGE_MODEL` accept an OpenAI model id
+too. `build_chat_llm` routes anything starting with `gpt-`, `chatgpt-`, `o1`, `o3`, or
+`o4` straight to the real OpenAI API (not Ollama) — a dedicated branch, same pattern
+as the Claude one above, so it can't accidentally redirect `EVAL_BASE_URL`'s local
+Ollama traffic for whichever role you leave local.
+
+**Recommendation:** `gpt-4o` as a `claude-sonnet-5` substitute for `EVAL_JUDGE_MODEL`
+(similar capability tier, well-documented in RAGAS's own examples); `gpt-4o-mini` if
+cost matters more than judge precision — same caveat as everywhere else in this doc:
+validate with [Let calibration make the call](#let-calibration-make-the-call) rather
+than assume, since judge choice directly shapes what "good" means for every future run.
+
+Steps:
+
+1. Set a real key in `.env` (the shipped `.env` has `OPENAI_API_KEY=sk-...` as a
+   placeholder — replace it, don't append a second line):
+
+   ```bash
+   # .env
+   OPENAI_API_KEY=sk-...
+   ```
+
+2. Point the judge (and/or generator) at it:
+
+   ```bash
+   # .env
+   EVAL_JUDGE_MODEL=gpt-4o
+   ```
+
+   or inline for one run, no `.env` edit: `--judge-model gpt-4o` on the command line
+   (`score_ragas.py`, `calibrate_judge.py`), or `EVAL_GEN_MODEL=gpt-4o` prefixed onto
+   `build_testset.py` for generation.
+
+3. Verify before a real run:
+
+   ```bash
+   .venv-eval/bin/python -c "from eval._common import build_chat_llm; \
+     print(build_chat_llm('gpt-4o').invoke('reply OK').content)"
+   ```
+
+4. Use exactly as documented elsewhere in this file — `score_ragas.py`,
+   `build_testset.py`, `calibrate_judge.py` all take the model id from `eval_config.py`
+   / `--judge-model` and never need to know which provider it maps to.
+
+## Using OpenRouter
+
+Instead of talking to Anthropic or OpenAI directly, you can route through
+[OpenRouter](https://openrouter.ai) — one API key, and the model id itself picks the
+provider, at OpenRouter's markup on top of the underlying API's price. `build_chat_llm`
+routes any model id containing a `/` to OpenRouter, using its
+`"<provider>/<model>"` naming convention (e.g. `openai/gpt-4o`,
+`anthropic/claude-sonnet-5`, `mistralai/mistral-small`) — this is a separate branch
+from the direct-OpenAI one above, with its own base URL and key, so it can't collide
+with `EVAL_BASE_URL`'s local-Ollama traffic for whichever role you leave local.
+
+Steps:
+
+1. Get a key at [openrouter.ai/keys](https://openrouter.ai/keys) and add it to `.env`:
+
+   ```bash
+   # .env
+   OPENROUTER_API_KEY=sk-or-...
+   ```
+
+2. Point the judge (and/or generator) at a provider/model pair:
+
+   ```bash
+   # .env
+   EVAL_JUDGE_MODEL=openai/gpt-4o
+   ```
+
+   or inline for one run: `--judge-model openai/gpt-4o` / prefix `EVAL_GEN_MODEL=...`.
+
+3. Verify:
+
+   ```bash
+   .venv-eval/bin/python -c "from eval._common import build_chat_llm; \
+     print(build_chat_llm('openai/gpt-4o').invoke('reply OK').content)"
+   ```
+
+4. Use exactly as documented elsewhere in this file — same model-id-decides-provider
+   pattern as the direct-Anthropic and direct-OpenAI paths above.
+
+**Caveat:** don't point `EVAL_GEN_MODEL` or `EVAL_JUDGE_MODEL` at a locally-pulled
+Ollama model whose name happens to contain a `/` (e.g. a custom
+`ollama pull hf.co/<user>/<repo>` GGUF) — it would be misrouted to OpenRouter instead
+of Ollama. Not a concern for any model name this harness ships with by default.
 
 ## Smoke test on a partial ingest
 
