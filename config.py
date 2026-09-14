@@ -123,6 +123,9 @@ MAX_CHUNKS_PER_ARTICLE = 3
 MIN_SCORE_THRESHOLD = 0.35
 ENABLE_QUERY_REWRITING = False
 ENABLE_HYBRID_SEARCH = False
+ENABLE_QUERY_DECOMPOSITION = False
+MAX_SUBQUERIES = 4          # cap on LLM-decided subquery fan-out
+MIN_DECOMPOSITION_WORDS = 6  # below this word count, skip decomposition (cheap cost gate)
 
 # ── Answer generation ────────────────────────────────────────────────────────
 MAX_OUTPUT_TOKENS = 1024
