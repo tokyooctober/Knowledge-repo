@@ -105,15 +105,24 @@ coming from a chart rather than prose without a second lookup.
    subqueries, pooled is just the holistic results — identical to the
    single-query behaviour)
 
-5. POST-FILTERING, once, on the pooled set
+5. CROSS-ENCODER RERANK (only when ENABLE_RERANK)
+   pooled[:RERANK_POOL] = rerank(query, pooled[:RERANK_POOL])
+   (a cross-encoder scores (query, chunk) JOINTLY, rather than comparing two
+   independently computed embeddings, and reorders on that. It only reorders —
+   SearchResult.score stays cosine similarity, because MIN_SCORE_THRESHOLD and
+   every downstream reader assume that scale, and cross-encoder outputs are
+   logits that can be negative. Any failure returns the vector order unchanged:
+   reranking is an optimisation, never a hard dependency)
+
+6. POST-FILTERING, once, on the pooled set
    a. Discard results with score < MIN_SCORE_THRESHOLD (0.35 default)
    b. Optional: MAX_CHUNKS_PER_ARTICLE — cap results from the same article
       (prevents a very long article — or a dominant article across several
       subqueries — from dominating all top_k slots)
    c. Trim to top_k
 
-6. RETURN results (in pooled order — score-descending, except any
-   subquery-only tail, which follows)
+7. RETURN results (in pooled order — reranked if enabled, otherwise
+   score-descending, with any subquery-only tail following)
 ```
 
 ---
@@ -239,7 +248,25 @@ MAX_SUBQUERIES             = 4       # cap on LLM-decided subquery fan-out
 MIN_DECOMPOSITION_WORDS    = 6       # below this word count, skip decomposition (cost gate)
 HOLISTIC_OVERFETCH         = 8       # x top_k for the original query's own search when
                                      # decomposing (see Query Decomposition)
+ENABLE_RERANK              = True
+RERANK_MODEL               = "BAAI/bge-reranker-v2-m3"   # 8192-token context
+RERANK_POOL                = 48      # candidates scored per query (~38 ms each)
+RERANK_MAX_LENGTH          = 1024    # covers the ~610-token worst-case pair
 ```
+
+**Why a long-context reranker.** Chunks are `CHUNK_SIZE` (512) tokens, so a (query, chunk)
+pair runs ~550 tokens at the median and ~610 at the max. Every 512-limit cross-encoder —
+`ms-marco-MiniLM`, `bge-reranker-base`, `bge-reranker-large` — therefore truncates the chunk
+tail on ~69% of pairs, and measured, that truncation *demoted the correct article* on
+single-source questions (recall 1.000 -> 0.750). `bge-reranker-v2-m3` has identical capacity
+to `bge-reranker-large` (24 layers, 1024 hidden, ~558M params) but an 8192-token window, so
+it scores whole chunks and holds single-source recall at 1.000.
+
+**Why `RERANK_POOL = 48`.** Cost is linear at ~38 ms per candidate, so the pool size *is* the
+latency budget: 24 costs ~0.97 s, 48 ~1.84 s, 200 ~7.4 s. Quality does not follow the same
+curve — measured recall rises to 48 and then falls (deeper pools hand the reranker more
+distractors than signal), so 48 is both the best measured depth and near the practical
+latency ceiling.
 
 ---
 

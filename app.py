@@ -14,6 +14,7 @@ import argparse
 import dataclasses
 import json
 import sys
+from collections.abc import Callable
 from datetime import date, datetime
 
 from config import AUTHOR_NAME, DEFAULT_TOP_K
@@ -26,10 +27,24 @@ log = get_logger(__name__)
 # ── query path ─────────────────────────────────────────────────────────────
 
 
-def run_query(query: str, top_k: int = DEFAULT_TOP_K, filters: dict | None = None) -> Answer:
+def run_query(
+    query: str,
+    top_k: int = DEFAULT_TOP_K,
+    filters: dict | None = None,
+    progress: Callable[[str], None] | None = None,
+) -> Answer:
+    """`progress` reports the current phase, for UIs that show a wait indicator. Retrieval is
+    no longer instant once reranking is on, so the phases are worth surfacing."""
+    from config import ENABLE_RERANK, RERANK_POOL
     from query.answerer import answer
     from query.retriever import retrieve
 
+    if progress:
+        progress(
+            f"Searching the corpus and reranking up to {RERANK_POOL} candidates…"
+            if ENABLE_RERANK
+            else "Searching the corpus…"
+        )
     results = retrieve(query, top_k=top_k, filters=filters)
     log.info(
         "Retrieval complete",
@@ -39,6 +54,8 @@ def run_query(query: str, top_k: int = DEFAULT_TOP_K, filters: dict | None = Non
             "top_score": results[0].score if results else None,
         },
     )
+    if progress:
+        progress(f"Generating an answer from {len(results)} sources…")
     return answer(query, results)
 
 
@@ -215,8 +232,11 @@ def _streamlit_app() -> None:  # pragma: no cover - exercised via `streamlit run
             filters["tags"] = [t.strip() for t in tags.split(",")]
         if date_after.strip():
             filters["date_after"] = datetime.fromisoformat(date_after.strip())
-        with st.spinner("Retrieving and generating…"):
-            ans = run_query(query, DEFAULT_TOP_K, filters or None)
+        with st.status("Working…", expanded=True) as status:
+            ans = run_query(
+                query, DEFAULT_TOP_K, filters or None, progress=lambda msg: status.update(label=msg)
+            )
+            status.update(label="Done", state="complete", expanded=False)
         st.markdown(ans.response)
         st.subheader("Sources")
         for s in ans.sources:

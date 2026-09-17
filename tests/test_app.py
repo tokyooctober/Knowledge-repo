@@ -205,6 +205,29 @@ def test_run_query_wires_retrieve_into_answer(monkeypatch):
     assert out.response == "grounded"
 
 
+def test_run_query_reports_progress_phases_in_order(monkeypatch):
+    """The UI's wait feedback is driven by this callback. Retrieval is no longer instant once
+    reranking is on, so the phases must fire in order and name what is actually happening."""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        "query.retriever.retrieve", lambda q, top_k, filters: [SimpleNamespace(score=0.9)]
+    )
+    monkeypatch.setattr("query.answerer.answer", lambda q, results: _answer(response="ok"))
+    seen: list[str] = []
+    app.run_query("q", 6, None, progress=seen.append)
+    assert len(seen) == 2
+    assert "reranking" in seen[0].lower()  # retrieval phase names the slow part
+    assert "1 sources" in seen[1] and "generating" in seen[1].lower()
+
+
+def test_run_query_progress_is_optional(monkeypatch):
+    """The CLI path passes no callback and must be unaffected."""
+    monkeypatch.setattr("query.retriever.retrieve", lambda q, top_k, filters: [])
+    monkeypatch.setattr("query.answerer.answer", lambda q, results: _answer(response="ok"))
+    assert app.run_query("q", 6, None).response == "ok"
+
+
 def test_cli_integration_seeded_index(monkeypatch, tmp_path, capsys):
     """The Success Criterion: a known question cites the right article."""
     import hashlib

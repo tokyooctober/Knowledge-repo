@@ -7,6 +7,9 @@ score and per-article policy live here.
 When query decomposition fires, the original query is still searched (wider, at
 `top_k * HOLISTIC_OVERFETCH`) and is what ranks the results — subquery searches only widen
 the candidate pool. See `_merge_by_holistic_rank`.
+
+With `ENABLE_RERANK`, a cross-encoder then reorders the top `RERANK_POOL` candidates by
+scoring (query, chunk) jointly. It only reorders: `.score` stays cosine similarity.
 """
 
 from __future__ import annotations
@@ -18,11 +21,15 @@ from config import (
     ENABLE_HYBRID_SEARCH,
     ENABLE_QUERY_DECOMPOSITION,
     ENABLE_QUERY_REWRITING,
+    ENABLE_RERANK,
     HOLISTIC_OVERFETCH,
     MAX_CHUNKS_PER_ARTICLE,
     MAX_SUBQUERIES,
     MIN_DECOMPOSITION_WORDS,
     MIN_SCORE_THRESHOLD,
+    RERANK_MAX_LENGTH,
+    RERANK_MODEL,
+    RERANK_POOL,
 )
 from ingestion.embedder import embed_query
 from llm_provider import ProviderConnectionError, get_embedding_provider, get_text_provider
@@ -49,6 +56,7 @@ _DECOMPOSITION_SYSTEM_PROMPT = "\n".join(
 _LEADING_MARKER = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s*")
 
 _store: VectorStore | None = None
+_reranker = None
 
 
 def _get_store() -> VectorStore:
@@ -59,8 +67,42 @@ def _get_store() -> VectorStore:
 
 
 def _reset_store_for_tests() -> None:
-    global _store
+    global _store, _reranker
     _store = None
+    _reranker = None
+
+
+def _get_reranker():
+    """Cached cross-encoder. Loading costs ~7 s, so it happens once per process."""
+    global _reranker
+    if _reranker is None:
+        from sentence_transformers import CrossEncoder
+
+        _reranker = CrossEncoder(RERANK_MODEL, max_length=RERANK_MAX_LENGTH)
+    return _reranker
+
+
+def _rerank(query: str, candidates: list[SearchResult]) -> list[SearchResult]:
+    """Reorder the first `RERANK_POOL` candidates by a cross-encoder's joint (query, chunk)
+    score, leaving `SearchResult.score` untouched — it stays cosine similarity, which
+    `MIN_SCORE_THRESHOLD` and every downstream reader still assume. Any failure returns the
+    input order: a missing or broken reranker must never take retrieval down with it."""
+    head, tail = candidates[:RERANK_POOL], candidates[RERANK_POOL:]
+    if len(head) < 2:
+        return candidates
+    try:
+        scores = _get_reranker().predict(
+            [(query, c.text) for c in head], show_progress_bar=False
+        )
+    except Exception:  # noqa: BLE001 - reranking is an optimisation, never a hard dependency
+        log.warning(
+            "Reranking failed — falling back to vector order",
+            extra={"query": query, "candidate_count": len(head), "model": RERANK_MODEL},
+            exc_info=True,
+        )
+        return candidates
+    ordered = [c for _, c in sorted(zip(scores, head, strict=True), key=lambda pair: -pair[0])]
+    return ordered + tail
 
 
 def _parse_subqueries(raw: str, original_query: str) -> list[str]:
@@ -184,12 +226,15 @@ def retrieve(
         raw = _merge_by_holistic_rank(holistic, per_fragment)
     else:
         raw = holistic
+    if ENABLE_RERANK:
+        raw = _rerank(query, raw)
     log.debug(
         "Results before filtering",
         extra={
             "raw_result_count": len(raw),
             "max_score": raw[0].score if raw else None,
             "subquery_count": len(subqueries),
+            "reranked": ENABLE_RERANK,
         },
     )
 

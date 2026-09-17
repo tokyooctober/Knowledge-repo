@@ -70,6 +70,13 @@ class FakeTextProvider:
         )
 
 
+@pytest.fixture(autouse=True)
+def _rerank_off_unless_asked(monkeypatch):
+    """Reranking ships enabled, so default it off here: tests must not depend on the ambient
+    config value, and must never load the real cross-encoder. `with_reranker` re-enables it."""
+    monkeypatch.setattr(rt, "ENABLE_RERANK", False)
+
+
 @pytest.fixture
 def wire(monkeypatch):
     """Patch embed_query (identity — the "vector" IS the query text, so FakeStore can
@@ -96,6 +103,35 @@ def with_decomposition(monkeypatch):
         provider = FakeTextProvider(content=content, error=error)
         monkeypatch.setattr(rt, "get_text_provider", lambda: provider)
         return provider
+
+    return install
+
+
+class FakeReranker:
+    """Stands in for the cross-encoder. `scores_by_chunk` maps chunk_id -> relevance, so a
+    test can state the intended order directly; unlisted chunks score 0."""
+
+    def __init__(self, scores_by_chunk: dict | None = None, error: Exception | None = None):
+        self._scores = scores_by_chunk or {}
+        self._error = error
+        self.pairs_seen: list[tuple[str, str]] = []
+
+    def predict(self, pairs, show_progress_bar=False):
+        if self._error is not None:
+            raise self._error
+        self.pairs_seen = list(pairs)
+        return [self._scores.get(text.removeprefix("text "), 0.0) for _, text in pairs]
+
+
+@pytest.fixture
+def with_reranker(monkeypatch):
+    """Enable reranking and install a `FakeReranker`; return a helper to configure it."""
+    monkeypatch.setattr(rt, "ENABLE_RERANK", True)
+
+    def install(scores_by_chunk: dict | None = None, error: Exception | None = None):
+        fake = FakeReranker(scores_by_chunk, error)
+        monkeypatch.setattr(rt, "_get_reranker", lambda: fake)
+        return fake
 
     return install
 
@@ -556,3 +592,65 @@ def test_decomposition_additive_preserves_single_source_answer_despite_false_spl
     )
     out = rt.retrieve(query, top_k=6)
     assert "gold_correct" in {r.chunk_id for r in out}
+
+
+# Layer 4 — cross-encoder reranking
+
+
+def test_rerank_reorders_by_cross_encoder_score(wire, with_reranker):
+    """The cross-encoder's joint (query, chunk) judgement wins over cosine order — that is
+    the whole point: a chunk cosine ranks 3rd can be the most relevant one."""
+    with_reranker({"c0": 0.1, "c1": 0.2, "c2": 0.9})
+    wire([_result(f"c{i}", 0.9 - i * 0.01, url=f"https://example.com/{i}") for i in range(3)])
+    out = rt.retrieve("q", top_k=3)
+    assert [r.chunk_id for r in out] == ["c2", "c1", "c0"]
+
+
+def test_rerank_leaves_score_as_cosine_similarity(wire, with_reranker):
+    """Reranking must not overwrite `.score` — MIN_SCORE_THRESHOLD and the UI both read it
+    as cosine, and cross-encoder logits are on an entirely different scale."""
+    with_reranker({"lo": 5.0, "hi": -5.0})
+    wire(
+        [
+            _result("hi", 0.90, url="https://example.com/1"),
+            _result("lo", 0.60, url="https://example.com/2"),
+        ]
+    )
+    out = rt.retrieve("q", top_k=2)
+    assert [r.chunk_id for r in out] == ["lo", "hi"]  # reranked order
+    assert [r.score for r in out] == [0.60, 0.90]  # original cosine scores, untouched
+
+
+def test_rerank_disabled_leaves_vector_order(wire, with_reranker, monkeypatch):
+    fake = with_reranker({"c2": 0.9})
+    monkeypatch.setattr(rt, "ENABLE_RERANK", False)
+    wire([_result(f"c{i}", 0.9 - i * 0.01, url=f"https://example.com/{i}") for i in range(3)])
+    out = rt.retrieve("q", top_k=3)
+    assert [r.chunk_id for r in out] == ["c0", "c1", "c2"]
+    assert fake.pairs_seen == []  # never invoked
+
+
+def test_rerank_failure_falls_back_to_vector_order(wire, with_reranker):
+    """A missing or broken reranker degrades to plain vector search, it does not take
+    retrieval down."""
+    with_reranker(error=RuntimeError("model unavailable"))
+    wire([_result(f"c{i}", 0.9 - i * 0.01, url=f"https://example.com/{i}") for i in range(3)])
+    out = rt.retrieve("q", top_k=3)
+    assert [r.chunk_id for r in out] == ["c0", "c1", "c2"]
+
+
+def test_rerank_scores_at_most_rerank_pool_candidates(wire, with_reranker, monkeypatch):
+    """Latency is ~38 ms per candidate, so the pool bound is a cost guarantee, not a detail."""
+    monkeypatch.setattr(rt, "RERANK_POOL", 4)
+    fake = with_reranker()
+    wire([_result(f"c{i}", 0.9 - i * 0.001, url=f"https://example.com/{i}") for i in range(20)])
+    rt.retrieve("q", top_k=6)
+    assert len(fake.pairs_seen) == 4
+
+
+def test_rerank_skipped_when_fewer_than_two_candidates(wire, with_reranker):
+    fake = with_reranker()
+    wire([_result("only", 0.9)])
+    out = rt.retrieve("q", top_k=6)
+    assert [r.chunk_id for r in out] == ["only"]
+    assert fake.pairs_seen == []
