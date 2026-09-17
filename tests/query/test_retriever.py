@@ -226,35 +226,38 @@ def test_integration_seeded_store_returns_the_matching_chunk(monkeypatch):
 _LONG_QUERY = "Compare the author's view on inflation and on interest rates"
 
 
-# Layer 1 — `_fuse`, pure function, no mocking
+# Layer 1 — `_merge_by_holistic_rank`, pure function, no mocking
 
 
-def test_fuse_disjoint_articles_merge_all():
-    a = [_result("a1", 0.9, url="https://example.com/a")]
-    b = [_result("b1", 0.8, url="https://example.com/b")]
-    out = rt._fuse([a, b])
-    assert [r.chunk_id for r in out] == ["a1", "b1"]
+def test_merge_keeps_holistic_order_ahead_of_subquery_only_finds():
+    holistic = [_result("h1", 0.70, url="https://example.com/h1")]
+    frag = [_result("f1", 0.95, url="https://example.com/f1")]
+    out = rt._merge_by_holistic_rank(holistic, [frag])
+    # f1's 0.95 was measured against a subquery, h1's 0.70 against the real question —
+    # not comparable, so the holistic hit keeps the better slot regardless of magnitude.
+    assert [r.chunk_id for r in out] == ["h1", "f1"]
 
 
-def test_fuse_dedupes_same_chunk_id_keeping_max_score():
-    a = [_result("x", 0.4, url="https://example.com/a")]
-    b = [_result("x", 0.9, url="https://example.com/a")]
-    out = rt._fuse([a, b])
+def test_merge_keeps_the_holistic_score_for_a_chunk_found_by_both():
+    holistic = [_result("x", 0.40, url="https://example.com/a")]
+    frag = [_result("x", 0.90, url="https://example.com/a")]
+    out = rt._merge_by_holistic_rank(holistic, [frag])
     assert len(out) == 1
-    assert out[0].score == 0.9
+    assert out[0].score == 0.40
 
 
-def test_fuse_handles_one_empty_subquery_list():
-    a: list[SearchResult] = []
-    b = [_result("b1", 0.7, url="https://example.com/b")]
-    out = rt._fuse([a, b])
-    assert [r.chunk_id for r in out] == ["b1"]
+def test_merge_orders_subquery_only_tail_by_best_rank_across_subqueries():
+    a = [_result("a0", 0.60), _result("a1", 0.59)]
+    b = [_result("b0", 0.95), _result("a1", 0.99)]  # a1 also ranks 2nd here, a0 not present
+    out = rt._merge_by_holistic_rank([], [a, b])
+    # round-robin by best rank within each list: a0 (rank 0), b0 (rank 0), then a1 (rank 1)
+    assert [r.chunk_id for r in out] == ["a0", "b0", "a1"]
 
 
-def test_fuse_all_same_article_collapses_to_single_query_shape():
-    same = [_result(f"c{i}", 0.9 - i * 0.01, url="https://example.com/a") for i in range(3)]
-    out = rt._fuse([same, same])
-    assert [r.chunk_id for r in out] == [r.chunk_id for r in same]
+def test_merge_with_no_subquery_results_is_just_the_holistic_list():
+    holistic = [_result(f"h{i}", 0.9 - i * 0.01, url=f"https://example.com/h{i}") for i in range(3)]
+    out = rt._merge_by_holistic_rank(holistic, [[]])
+    assert [r.chunk_id for r in out] == ["h0", "h1", "h2"]
 
 
 # Layer 1b — `_decompose_query` / `_parse_subqueries`, mocked LLM call
@@ -267,14 +270,27 @@ def test_decompose_single_topic_mock_one_search_call(wire, with_decomposition):
     assert len(store.search_calls) == 1
 
 
-def test_decompose_two_topic_mock_two_search_calls(wire, with_decomposition):
+def test_decompose_two_topic_searches_original_plus_each_subquery(wire, with_decomposition):
     sub_a = "the author's view on inflation"
     sub_b = "the author's view on interest rates"
     with_decomposition(content=f"{sub_a}\n{sub_b}")
     store = wire({sub_a: [_result("a1", 0.9, url="https://example.com/a")],
                   sub_b: [_result("b1", 0.8, url="https://example.com/b")]})
     rt.retrieve(_LONG_QUERY)
-    assert len(store.search_calls) == 2
+    # the original query is searched too — it is what ranks the merged pool
+    assert len(store.search_calls) == 3
+    assert store.search_calls[0]["query_vector"] == _LONG_QUERY
+    assert [c["query_vector"] for c in store.search_calls[1:]] == [sub_a, sub_b]
+
+
+def test_decompose_holistic_search_is_wider_than_subquery_searches(wire, with_decomposition):
+    sub_a = "the author's view on inflation"
+    sub_b = "the author's view on interest rates"
+    with_decomposition(content=f"{sub_a}\n{sub_b}")
+    store = wire({sub_a: [_result("a1", 0.9, url="https://example.com/a")]})
+    rt.retrieve(_LONG_QUERY, top_k=6)
+    assert store.search_calls[0]["top_k"] == 6 * rt.HOLISTIC_OVERFETCH
+    assert [c["top_k"] for c in store.search_calls[1:]] == [12, 12]
 
 
 def test_decompose_multi_entity_mock_three_search_calls(wire, with_decomposition):
@@ -288,7 +304,7 @@ def test_decompose_multi_entity_mock_three_search_calls(wire, with_decomposition
         {sq: [_result(sq, 0.9, url=f"https://example.com/{i}")] for i, sq in enumerate(subs)}
     )
     rt.retrieve(_LONG_QUERY)
-    assert len(store.search_calls) == 3
+    assert len(store.search_calls) == 4  # original + 3 subqueries
 
 
 def test_decompose_malformed_output_falls_back_to_original_query(wire, with_decomposition):
@@ -325,10 +341,11 @@ def test_decomposition_skipped_below_min_words(wire, with_decomposition):
 
 
 def test_decomposition_disabled_by_default_flag_off(wire, monkeypatch):
+    monkeypatch.setattr(rt, "ENABLE_QUERY_DECOMPOSITION", False)
     provider = FakeTextProvider(content="irrelevant")
     monkeypatch.setattr(rt, "get_text_provider", lambda: provider)
     store = wire([_result("a", 0.9)])
-    rt.retrieve(_LONG_QUERY)  # ENABLE_QUERY_DECOMPOSITION defaults False — wire doesn't touch it
+    rt.retrieve(_LONG_QUERY)
     assert provider.calls == 0
     assert len(store.search_calls) == 1
 
@@ -341,7 +358,7 @@ def test_decompose_caps_at_max_subqueries(wire, with_decomposition, monkeypatch)
         {sq: [_result(sq, 0.9, url=f"https://example.com/{i}")] for i, sq in enumerate(subs)}
     )
     rt.retrieve(_LONG_QUERY)
-    assert len(store.search_calls) == 2
+    assert len(store.search_calls) == 3  # original + 2 subqueries (third capped away)
 
 
 def test_decompose_dedupes_case_insensitive_duplicate_lines(wire, with_decomposition):
@@ -355,7 +372,7 @@ def test_decompose_dedupes_case_insensitive_duplicate_lines(wire, with_decomposi
     )
     rt.retrieve(_LONG_QUERY)
     # 3 raw lines, first two are near-duplicates -> 2 distinct subqueries, not 3
-    assert len(store.search_calls) == 2
+    assert len(store.search_calls) == 3  # original + those 2
 
 
 # Layer 2 — component: `retrieve()` end-to-end with the decomposition + fusion wired together
@@ -405,9 +422,11 @@ def test_decomposition_respects_max_chunks_per_article_across_subqueries(wire, w
     )
     out = rt.retrieve(_LONG_QUERY, top_k=6)
     # 6 distinct chunks from one article across the two subqueries; cap (3) must apply to
-    # the FUSED set, not per subquery, or the single-article-dominance bug sneaks back in.
+    # the MERGED set, not per subquery, or the single-article-dominance bug sneaks back in.
     assert len(out) == 3
-    assert [r.chunk_id for r in out] == ["a0", "a1", "a2"]  # the 3 highest-scoring
+    # The holistic query finds nothing here, so all six are fragment-only and sort by best
+    # fragment rank (never by raw score — scores from different subqueries aren't comparable).
+    assert [r.chunk_id for r in out] == ["a0", "b0", "a1"]
 
 
 def test_decomposition_output_is_score_descending_and_trimmed_to_top_k(wire, with_decomposition):
@@ -431,6 +450,7 @@ def test_decomposition_output_is_score_descending_and_trimmed_to_top_k(wire, wit
 
 
 def test_decomposition_off_is_identical_to_current_behavior(wire, monkeypatch):
+    monkeypatch.setattr(rt, "ENABLE_QUERY_DECOMPOSITION", False)
     provider = FakeTextProvider(content="irrelevant")
     monkeypatch.setattr(rt, "get_text_provider", lambda: provider)
     store = wire([_result("a", 0.9)])
@@ -439,3 +459,100 @@ def test_decomposition_off_is_identical_to_current_behavior(wire, monkeypatch):
     assert store.search_calls[0]["query_vector"] == _LONG_QUERY
     assert provider.calls == 0
     assert out[0].chunk_id == "a"
+
+
+# Layer 3 — regression guard: decomposition must be ADDITIVE, never substitutive
+# (xfail until the fix lands: the original query's own search must always be included
+#  in the fused pool — see the RAGAS-regression audit on commit 55f272f)
+
+
+def test_decomposition_additive_preserves_chunk_that_fragments_score_below_threshold(
+    wire, with_decomposition
+):
+    """A chunk that clears MIN_SCORE_THRESHOLD against the holistic query can score
+    below it against every individual fragment (the fragment lacks context the full
+    question carries). Decomposition must be additive: the chunk must still surface."""
+    sub_a = "the author's view on inflation"
+    sub_b = "the author's view on interest rates"
+    with_decomposition(content=f"{sub_a}\n{sub_b}")
+    wire(
+        {
+            _LONG_QUERY: [_result("shared", 0.5, url="https://example.com/shared")],
+            sub_a: [_result("shared", 0.2, url="https://example.com/shared")],
+            sub_b: [_result("shared", 0.25, url="https://example.com/shared")],
+        }
+    )
+    out = rt.retrieve(_LONG_QUERY, top_k=6)
+    assert "shared" in {r.chunk_id for r in out}
+
+
+def test_decomposition_on_is_never_worse_than_off_for_same_query(wire, monkeypatch):
+    """Decomposition may ADD candidates but must never cause chunks the plain query
+    finds cleanly to drop out. Same store, same query, toggled flag."""
+    sub_a = "the author's view on inflation"
+    sub_b = "the author's view on interest rates"
+    wire(
+        {
+            _LONG_QUERY: [
+                _result("full1", 0.6, url="https://example.com/full1"),
+                _result("full2", 0.5, url="https://example.com/full2"),
+            ],
+            sub_a: [_result("full1", 0.3, url="https://example.com/full1")],  # too weak alone
+            sub_b: [_result("other", 0.4, url="https://example.com/other")],
+        }
+    )
+
+    monkeypatch.setattr(rt, "ENABLE_QUERY_DECOMPOSITION", False)
+    off_ids = {r.chunk_id for r in rt.retrieve(_LONG_QUERY, top_k=6)}
+    assert off_ids == {"full1", "full2"}  # sanity: the plain query alone finds both
+
+    monkeypatch.setattr(rt, "ENABLE_QUERY_DECOMPOSITION", True)
+    monkeypatch.setattr(
+        rt, "get_text_provider", lambda: FakeTextProvider(content=f"{sub_a}\n{sub_b}")
+    )
+    on_ids = {r.chunk_id for r in rt.retrieve(_LONG_QUERY, top_k=6)}
+
+    assert off_ids <= on_ids
+
+
+def test_decomposition_keeps_holistic_top_k_when_slots_are_saturated(wire, with_decomposition):
+    """Production conditions the other tests miss: every slot contested, and scores clustered
+    in the real 0.60-0.85 band so MIN_SCORE_THRESHOLD (0.35) is inert and ranking is purely
+    ordinal. A fragment match scoring 0.82 against its own fragment must not displace a chunk
+    scoring 0.70 against the real question — those numbers aren't comparable."""
+    sub_a = "the author's view on inflation"
+    sub_b = "the author's view on interest rates"
+    with_decomposition(content=f"{sub_a}\n{sub_b}")
+    def band(prefix, top):
+        return [
+            _result(f"{prefix}{i}", top - i * 0.01, url=f"https://example.com/{prefix}{i}")
+            for i in range(8)
+        ]
+
+    # Every list clears MIN_SCORE_THRESHOLD (0.35) comfortably, and the subquery matches
+    # even out-score the holistic ones — exactly the production shape.
+    wire({_LONG_QUERY: band("h", 0.80), sub_a: band("fa", 0.84), sub_b: band("fb", 0.83)})
+    out = rt.retrieve(_LONG_QUERY, top_k=6)
+    assert len(out) == 6  # saturated
+    assert [r.chunk_id for r in out] == [f"h{i}" for i in range(6)]
+
+
+def test_decomposition_additive_preserves_single_source_answer_despite_false_split(
+    wire, with_decomposition
+):
+    """LLM over-eagerly splits a genuinely single-source question; both fragments
+    happen to surface a different, weaker/wrong chunk each. The correct chunk — which
+    the holistic query finds well — must still be in the final results."""
+    query = "What does the author think about the outlook for gold prices next year"
+    sub_a = "the outlook for gold prices"
+    sub_b = "next year economic forecast"
+    with_decomposition(content=f"{sub_a}\n{sub_b}")
+    wire(
+        {
+            query: [_result("gold_correct", 0.8, url="https://example.com/gold")],
+            sub_a: [_result("wrong1", 0.5, url="https://example.com/wrong1")],
+            sub_b: [_result("wrong2", 0.45, url="https://example.com/wrong2")],
+        }
+    )
+    out = rt.retrieve(query, top_k=6)
+    assert "gold_correct" in {r.chunk_id for r in out}

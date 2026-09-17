@@ -123,9 +123,12 @@ MAX_CHUNKS_PER_ARTICLE = 3
 MIN_SCORE_THRESHOLD = 0.35
 ENABLE_QUERY_REWRITING = False
 ENABLE_HYBRID_SEARCH = False
-ENABLE_QUERY_DECOMPOSITION = False
+ENABLE_QUERY_DECOMPOSITION = True
 MAX_SUBQUERIES = 4          # cap on LLM-decided subquery fan-out
 MIN_DECOMPOSITION_WORDS = 6  # below this word count, skip decomposition (cheap cost gate)
+HOLISTIC_OVERFETCH = 8      # x top_k for the original query's own search when decomposing:
+                            # wide enough to score fragment-surfaced candidates on the same
+                            # yardstick, and to reach chunks the top_k*2 window cut off
 
 # ── Answer generation ────────────────────────────────────────────────────────
 MAX_OUTPUT_TOKENS = 1024

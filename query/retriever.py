@@ -3,6 +3,10 @@
 Over-fetches `top_k * 2` from the vector store, then applies `MIN_SCORE_THRESHOLD` and the
 `MAX_CHUNKS_PER_ARTICLE` cap before trimming to `top_k`. The store returns raw top-k; the
 score and per-article policy live here.
+
+When query decomposition fires, the original query is still searched (wider, at
+`top_k * HOLISTIC_OVERFETCH`) and is what ranks the results — subquery searches only widen
+the candidate pool. See `_merge_by_holistic_rank`.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from config import (
     ENABLE_HYBRID_SEARCH,
     ENABLE_QUERY_DECOMPOSITION,
     ENABLE_QUERY_REWRITING,
+    HOLISTIC_OVERFETCH,
     MAX_CHUNKS_PER_ARTICLE,
     MAX_SUBQUERIES,
     MIN_DECOMPOSITION_WORDS,
@@ -122,16 +127,30 @@ def _decompose_query(query: str) -> list[str]:
     return subqueries
 
 
-def _fuse(per_subquery_results: list[list[SearchResult]]) -> list[SearchResult]:
-    """Dedupe by `chunk_id` across subqueries, keeping the max score seen for each chunk.
-    Sorted score-descending, same contract as a single `store.search` call."""
-    best: dict[str, SearchResult] = {}
-    for results in per_subquery_results:
-        for result in results:
-            existing = best.get(result.chunk_id)
-            if existing is None or result.score > existing.score:
-                best[result.chunk_id] = result
-    return sorted(best.values(), key=lambda r: r.score, reverse=True)
+def _merge_by_holistic_rank(
+    holistic: list[SearchResult], per_fragment: list[list[SearchResult]]
+) -> list[SearchResult]:
+    """Rank every candidate by its score against the ORIGINAL query.
+
+    Cosine scores are only comparable within one query vector, so a fragment's 0.66 and the
+    full question's 0.67 measure different things and must never be sorted against each
+    other. `holistic` is the only scored-on-the-real-question list, so it orders the result;
+    fragments contribute recall only. Candidates they surface from outside the holistic
+    window have no comparable score, so they sort after everything that does, by best
+    fragment rank — filling slots the holistic list could not.
+    """
+    scored_ids = {r.chunk_id for r in holistic}
+    best_rank: dict[str, tuple[int, SearchResult]] = {}
+    for results in per_fragment:
+        for rank, result in enumerate(results):
+            if result.chunk_id in scored_ids:
+                continue
+            existing = best_rank.get(result.chunk_id)
+            if existing is None or rank < existing[0]:
+                best_rank[result.chunk_id] = (rank, result)
+
+    tail = [result for _, result in sorted(best_rank.values(), key=lambda pair: pair[0])]
+    return list(holistic) + tail
 
 
 def retrieve(
@@ -151,12 +170,20 @@ def retrieve(
     store = _get_store()
     _guard_model(store)
 
-    subqueries = _decompose_query(query) or [query]
-    per_subquery_raw = [
-        store.search(query_vector=embed_query(sq), top_k=top_k * 2, filters=filters)
-        for sq in subqueries
-    ]
-    raw = _fuse(per_subquery_raw) if len(per_subquery_raw) > 1 else per_subquery_raw[0]
+    subqueries = _decompose_query(query)
+    holistic = store.search(
+        query_vector=embed_query(query),
+        top_k=top_k * (HOLISTIC_OVERFETCH if subqueries else 2),
+        filters=filters,
+    )
+    if subqueries:
+        per_fragment = [
+            store.search(query_vector=embed_query(sq), top_k=top_k * 2, filters=filters)
+            for sq in subqueries
+        ]
+        raw = _merge_by_holistic_rank(holistic, per_fragment)
+    else:
+        raw = holistic
     log.debug(
         "Results before filtering",
         extra={
@@ -168,7 +195,7 @@ def retrieve(
 
     kept: list[SearchResult] = []
     per_article: dict[str, int] = {}
-    for result in raw:  # already score-descending
+    for result in raw:  # holistic-ranked, then any fragment-only tail
         if result.score < MIN_SCORE_THRESHOLD:
             continue
         if per_article.get(result.article_url, 0) >= MAX_CHUNKS_PER_ARTICLE:
@@ -192,7 +219,7 @@ def retrieve(
                 "top_score": kept[0].score,
                 "bottom_score": kept[-1].score,
                 "subquery_count": len(subqueries),
-                "decomposition_triggered": len(subqueries) > 1,
+                "decomposition_triggered": bool(subqueries),
             },
         )
     return kept

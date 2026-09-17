@@ -16,6 +16,8 @@ corpus/
 eval/results/
 eval/dataset/candidates.jsonl
 eval/dataset/human_labels.jsonl
+# derived slice of testset.jsonl (multi-source questions only), regenerable
+eval/dataset/testset-multisource.jsonl
 
 # python
 __pycache__/

@@ -74,34 +74,46 @@ coming from a chart rather than prose without a second lookup.
 
 ```
 1. DECOMPOSE (optional — see Query Decomposition below)
-   subqueries = decompose(query) if ENABLE_QUERY_DECOMPOSITION else [query]
-   (decompose() returns [query] unchanged whenever decomposition is off, the
-   query is short, the LLM call fails, or its output is malformed/degenerate —
-   so this step is a no-op in every case except a genuine multi-topic split)
+   subqueries = decompose(query) if ENABLE_QUERY_DECOMPOSITION else []
+   (decompose() returns [] whenever decomposition is off, the query is short,
+   the LLM call fails, or its output is malformed/degenerate — so this step is
+   a no-op in every case except a genuine multi-topic split)
 
-2. EMBED + SEARCH, once per subquery
+2. EMBED + SEARCH the ORIGINAL query, always
+   holistic = vector_store.search(
+       query_vector=embedder.embed_query(query),
+       top_k=top_k * (HOLISTIC_OVERFETCH if subqueries else 2),
+       filters=filters,
+   )
+   (the original query is searched whether or not decomposition fired; when it
+   did, the window widens so the holistic list can also score the candidates
+   the subqueries surface — see Query Decomposition below)
+
+3. EMBED + SEARCH, once per subquery (only when subqueries is non-empty)
    for sq in subqueries:
-       query_vector = embedder.embed_query(sq)
-       (embed_query handles BGE instruction prefix internally)
        results = vector_store.search(
-           query_vector=query_vector,
+           query_vector=embedder.embed_query(sq),
            top_k=top_k * 2,        # over-fetch for post-filtering
            filters=filters,
        )
 
-3. FUSE (only when len(subqueries) > 1 — see Query Decomposition below)
-   pooled = fuse(per_subquery_results)   # dedupe by chunk_id, keep max score
-   (with one subquery, pooled is just that subquery's results — identical to
-   today's single-query behaviour)
+4. MERGE BY HOLISTIC RANK (only when subqueries is non-empty)
+   pooled = merge_by_holistic_rank(holistic, per_subquery_results)
+   (candidates in the holistic list keep their score against the ORIGINAL
+   query and stay in that order; candidates only the subqueries found have no
+   comparable score and sort after them, by best subquery rank. With no
+   subqueries, pooled is just the holistic results — identical to the
+   single-query behaviour)
 
-4. POST-FILTERING, once, on the pooled set
+5. POST-FILTERING, once, on the pooled set
    a. Discard results with score < MIN_SCORE_THRESHOLD (0.35 default)
    b. Optional: MAX_CHUNKS_PER_ARTICLE — cap results from the same article
       (prevents a very long article — or a dominant article across several
       subqueries — from dominating all top_k slots)
    c. Trim to top_k
 
-5. RETURN results (sorted by score, descending)
+6. RETURN results (in pooled order — score-descending, except any
+   subquery-only tail, which follows)
 ```
 
 ---
@@ -145,25 +157,43 @@ If ENABLE_QUERY_DECOMPOSITION and len(query.split()) >= MIN_DECOMPOSITION_WORDS:
   If 0 or 1 distinct lines survive -> fall back to [query] (not a real split).
   Otherwise -> subqueries = the parsed lines.
 
-Embed and search once per subquery (see Core Logic step 2), then fuse:
-  Dedupe by chunk_id across all subqueries' results, keeping the MAX score seen
-  for each chunk; sort by that score descending.
+Search the ORIGINAL query (wider — see Core Logic step 2) and once per subquery,
+then merge by holistic rank:
+  Candidates the holistic search returned keep their score against the original
+  query and stay in that (score-descending) order. Candidates only a subquery
+  found sort after all of those, ordered by their best subquery rank.
 ```
 
-**Why max-score fusion, not reciprocal rank fusion (RRF).** RRF exists to combine
-*incomparable* scoring systems (e.g. BM25 vs. cosine — the actual case in Hybrid Search
-below). Here every subquery is embedded by the same model into the same vector space, so
-cosine scores are directly comparable across subqueries; RRF would discard real relevance
-magnitude and produce rank-only scores incompatible with `MIN_SCORE_THRESHOLD` and every
-current reader of `SearchResult.score`. Max-score dedupe keeps `.score` meaning "cosine
-similarity," unchanged whether decomposition ran or not.
+**Subqueries decide what is *considered*; the original query decides what *wins*.**
+Decomposition must be strictly additive — it may widen the candidate pool, never remove a
+chunk the plain query would have returned.
 
-**Why filtering happens once, after fusion, not per subquery.** `MIN_SCORE_THRESHOLD` is
-equivalent either way under max-score fusion, so applying it once is simply simpler.
-`MAX_CHUNKS_PER_ARTICLE` is *not* equivalent: applying it per subquery would let a
-dominant article place up to the cap from *each* subquery (e.g. 3 + 3 = 6), reintroducing
-the single-article-dominance problem the cap exists to prevent, just laundered through
-fusion. It must run once, globally, on the fused pool.
+**Why not max-score fusion across subqueries.** An earlier version of this spec pooled every
+subquery's results and sorted by raw cosine, reasoning that one embedding model means one
+vector space means comparable scores. That is wrong, and it caused a measured regression
+(`context_recall` 0.915 → 0.690, `hit_rate@k` 1.000 → 0.900 on the n=10 smoke set). A cosine
+score is only meaningful *relative to the query vector it was measured against*: a short,
+generic subquery sits in a denser region of the space and produces a different baseline
+similarity than the long, specific original question. Observed directly — subquery matches
+scored **0.7867** while the holistic matches they displaced scored **0.7743**, and the
+displaced context was better. Sorting a mixed pool by these numbers compares two rulers with
+different zero points. Only the holistic list is scored on what the user actually asked, so
+only it may order the result.
+
+**Why the holistic search is widened to `top_k * HOLISTIC_OVERFETCH`.** It serves two jobs:
+it supplies the ranking yardstick for subquery-surfaced candidates (any that appear in this
+list carry a real holistic score; any that do not are known to fall outside it and sort
+below), and it reaches genuinely relevant chunks that the `top_k * 2` window cut off — for a
+two-topic question the second topic's chunks typically sit around holistic rank 15-25, which
+is where the multi-source benefit actually comes from once `MAX_CHUNKS_PER_ARTICLE` evicts
+the dominant article's surplus.
+
+**Why filtering happens once, after merging, not per subquery.** `MIN_SCORE_THRESHOLD` is
+near-inert in practice (real scores run 0.64-0.83 against a 0.35 floor), so applying it once
+is simply simpler. `MAX_CHUNKS_PER_ARTICLE` is *not* equivalent: applying it per subquery
+would let a dominant article place up to the cap from *each* subquery (e.g. 3 + 3 = 6),
+reintroducing the single-article-dominance problem the cap exists to prevent, just laundered
+through merging. It must run once, globally, on the merged pool.
 
 **Why the LLM decides subquery count instead of a fixed N.** A fixed split forces an
 artificial second sub-question onto every single-topic question and under-serves the rare
@@ -204,9 +234,11 @@ MAX_CHUNKS_PER_ARTICLE     = 3       # max results from a single article
 MIN_SCORE_THRESHOLD        = 0.35    # below this = not relevant
 ENABLE_QUERY_REWRITING     = False
 ENABLE_HYBRID_SEARCH       = False
-ENABLE_QUERY_DECOMPOSITION = False
+ENABLE_QUERY_DECOMPOSITION = True
 MAX_SUBQUERIES             = 4       # cap on LLM-decided subquery fan-out
 MIN_DECOMPOSITION_WORDS    = 6       # below this word count, skip decomposition (cost gate)
+HOLISTIC_OVERFETCH         = 8       # x top_k for the original query's own search when
+                                     # decomposing (see Query Decomposition)
 ```
 
 ---
