@@ -228,6 +228,55 @@ def test_run_query_progress_is_optional(monkeypatch):
     assert app.run_query("q", 6, None).response == "ok"
 
 
+def test_warm_models_loads_embedder_store_and_reranker(monkeypatch):
+    """Without this the first user question pays ~19 s of model loading and every later one
+    pays none, which reads as the app being slow rather than as a one-time cost."""
+    called = []
+    monkeypatch.setattr("config.ENABLE_RERANK", True)
+    monkeypatch.setattr("ingestion.embedder.embed_query", lambda q: called.append("embed") or [0.1])
+    monkeypatch.setattr(
+        "query.retriever._get_store",
+        lambda: type("S", (), {"search": lambda self, **kw: called.append("search") or []})(),
+    )
+    monkeypatch.setattr("query.retriever._get_reranker", lambda: called.append("rerank"))
+    timings = app.warm_models()
+    assert "embed" in called and "search" in called and "rerank" in called
+    assert set(timings) == {"embedder", "vector_store", "reranker"}
+
+
+def test_warm_models_skips_the_reranker_when_disabled(monkeypatch):
+    called = []
+    monkeypatch.setattr("config.ENABLE_RERANK", False)
+    monkeypatch.setattr("ingestion.embedder.embed_query", lambda q: [0.1])
+    monkeypatch.setattr(
+        "query.retriever._get_store",
+        lambda: type("S", (), {"search": lambda self, **kw: []})(),
+    )
+    monkeypatch.setattr("query.retriever._get_reranker", lambda: called.append("rerank"))
+    timings = app.warm_models()
+    assert called == []
+    assert "reranker" not in timings
+
+
+def test_warm_models_survives_a_failing_step(monkeypatch):
+    """Warming is an optimisation: a broken step must not stop the app starting, because the
+    lazy path still loads the model on first use."""
+    monkeypatch.setattr("config.ENABLE_RERANK", True)
+    monkeypatch.setattr("ingestion.embedder.embed_query", lambda q: [0.1])
+    monkeypatch.setattr(
+        "query.retriever._get_store",
+        lambda: type("S", (), {"search": lambda self, **kw: []})(),
+    )
+
+    def boom():
+        raise RuntimeError("no GPU")
+
+    monkeypatch.setattr("query.retriever._get_reranker", boom)
+    timings = app.warm_models()  # must not raise
+    assert "reranker" not in timings
+    assert "embedder" in timings
+
+
 def test_cli_integration_seeded_index(monkeypatch, tmp_path, capsys):
     """The Success Criterion: a known question cites the right article."""
     import hashlib

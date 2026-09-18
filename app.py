@@ -14,6 +14,7 @@ import argparse
 import dataclasses
 import json
 import sys
+import time
 from collections.abc import Callable
 from datetime import date, datetime
 
@@ -57,6 +58,45 @@ def run_query(
     if progress:
         progress(f"Generating an answer from {len(results)} sources…")
     return answer(query, results)
+
+
+def warm_models() -> dict[str, float]:
+    """Load the embedder, vector store and reranker before the first question arrives.
+
+    Measured cold: embedder 11.6 s, reranker 6.1 s, first Qdrant search 1.2 s. All three are
+    objects that live for the life of the process, so without this the first user question
+    pays ~19 s of loading and every later one pays none — which reads as the app being
+    mysteriously slow rather than as a one-time cost.
+
+    Ollama's answerer is deliberately *not* warmed here. It unloads on its own keep-alive
+    (5 min by default), so warming it would buy exactly one question while holding ~9 GB of
+    VRAM. Warming is an optimisation, so a failure is logged and swallowed — the lazy path
+    still works.
+    """
+    from config import ENABLE_RERANK
+    from ingestion.embedder import embed_query
+    from query.retriever import _get_reranker, _get_store
+
+    def _warm_store():
+        _get_store().search(query_vector=embed_query("warm up"), top_k=1, filters=None)
+
+    timings: dict[str, float] = {}
+    for name, fn in (
+        ("embedder", lambda: embed_query("warm up")),
+        ("vector_store", _warm_store),
+        ("reranker", _get_reranker if ENABLE_RERANK else None),
+    ):
+        if fn is None:
+            continue
+        start = time.perf_counter()
+        try:
+            fn()
+        except Exception:  # noqa: BLE001 - warming is best-effort; the lazy path still runs
+            log.warning("Warm-up step failed", extra={"step": name}, exc_info=True)
+            continue
+        timings[name] = round(time.perf_counter() - start, 2)
+    log.info("Model warm-up complete", extra=timings)
+    return timings
 
 
 def _parse_filters(args: argparse.Namespace) -> dict | None:
@@ -220,6 +260,14 @@ def _streamlit_app() -> None:  # pragma: no cover - exercised via `streamlit run
 
     configure_logging()
     st.title(f"🔍 Knowledge Repository — {AUTHOR_NAME}")
+
+    @st.cache_resource(show_spinner=False)
+    def _warm_once():
+        """Once per process, not per session — these models are shared by every viewer."""
+        return warm_models()
+
+    with st.spinner("Loading models (first run only)…"):
+        _warm_once()
 
     query = st.text_input("Ask a question:")
     col1, col2 = st.columns(2)
