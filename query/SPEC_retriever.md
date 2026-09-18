@@ -82,12 +82,14 @@ coming from a chart rather than prose without a second lookup.
 2. EMBED + SEARCH the ORIGINAL query, always
    holistic = vector_store.search(
        query_vector=embedder.embed_query(query),
-       top_k=top_k * (HOLISTIC_OVERFETCH if subqueries else 2),
+       top_k=_pool_depth(top_k, decomposed),
        filters=filters,
    )
-   (the original query is searched whether or not decomposition fired; when it
-   did, the window widens so the holistic list can also score the candidates
-   the subqueries surface — see Query Decomposition below)
+   (the original query is searched whether or not decomposition fired.
+   _pool_depth() takes its floor from whoever consumes the pool: with
+   ENABLE_RERANK on it is at least RERANK_POOL, because the reranker measured
+   far worse at depth 12 than at 48 and that need has nothing to do with
+   whether the query decomposed. Without a reranker it stays at top_k * 2.)
 
 3. EMBED + SEARCH, once per subquery (only when subqueries is non-empty)
    for sq in subqueries:
@@ -214,12 +216,23 @@ from the decomposition call, unparseable/empty output, or output that collapses 
 distinct lines all fall back to exactly today's single-query path. Decomposition is
 strictly additive when it works and a no-op when it doesn't.
 
-Enable via `ENABLE_QUERY_DECOMPOSITION = True` in config. Distinct from `ENABLE_QUERY_
-REWRITING` — a separate flag, not a redefinition of it, since that flag already has a
-different documented behaviour (see above). Worst-case added cost per query: one text
-completion (decomposition) plus up to `MAX_SUBQUERIES` extra embed + search calls;
+Enable via `ENABLE_QUERY_DECOMPOSITION` in config. Distinct from `ENABLE_QUERY_REWRITING` —
+a separate flag, not a redefinition of it, since that flag already has a different
+documented behaviour (see above). Worst-case added cost per query: one text completion
+(decomposition) plus up to `MAX_SUBQUERIES` extra embed + search calls;
 `MIN_DECOMPOSITION_WORDS` skips the LLM call entirely for short queries where a split is
 implausible.
+
+> **Currently OFF, and the merge below is broken.** Measured across all 50 eval questions:
+> decomposition changed the retrieved set on **zero** of them, because
+> `_merge_by_holistic_rank` appends subquery-only finds *behind* a holistic list that already
+> fills `RERANK_POOL` — so they are sliced off before the reranker ever scores them. The cost
+> was ~2.2 s/query on 47 of 50 queries, for nothing.
+>
+> Giving those finds slots does work, but barely: RRF(k=60) and simply reserving 12 of the 48
+> slots produce *identical* results, each gaining a net one question in fifty (2 better, 1
+> worse) — a coin flip, not a result. **Fix the merge before re-enabling the flag**, and
+> prefer slot reservation over RRF, which adds a tuning parameter for no measured gain.
 
 ---
 
@@ -243,7 +256,7 @@ MAX_CHUNKS_PER_ARTICLE     = 3       # max results from a single article
 MIN_SCORE_THRESHOLD        = 0.35    # below this = not relevant
 ENABLE_QUERY_REWRITING     = False
 ENABLE_HYBRID_SEARCH       = False
-ENABLE_QUERY_DECOMPOSITION = True
+ENABLE_QUERY_DECOMPOSITION = False   # see "Currently OFF" note above
 MAX_SUBQUERIES             = 4       # cap on LLM-decided subquery fan-out
 MIN_DECOMPOSITION_WORDS    = 6       # below this word count, skip decomposition (cost gate)
 HOLISTIC_OVERFETCH         = 8       # x top_k for the original query's own search when
@@ -346,11 +359,11 @@ log = get_logger(__name__)   # "knowledge_repo.query.retriever"
 - Assert over-long query is truncated (check token count of input to `embed_query`)
 - Integration test: seed Qdrant in-memory with known chunks; assert correct chunk retrieved for matching query
 
-**Query decomposition (`ENABLE_QUERY_DECOMPOSITION = True`):**
-- Unit-test `_fuse()` directly with hand-built result lists — no mocking needed: disjoint
-  articles merge, duplicate `chunk_id` across subqueries keeps the max score, one empty
-  subquery list doesn't break fusion, identical results from every subquery collapse to
-  that same list unchanged (the regression guard for single-source questions)
+**Query decomposition (currently disabled — see the note above):**
+- Unit-test `_merge_by_holistic_rank()` directly with hand-built result lists — no mocking
+  needed: holistic order is preserved ahead of subquery-only finds, a chunk found by both
+  keeps its *holistic* score rather than the larger subquery one, the subquery-only tail
+  orders by best rank across lists, and an empty subquery list is a no-op
 - Mock `get_text_provider()` the same way `embed_query`/`get_embedding_provider` are
   mocked; assert a well-formed N-line response fans out to N `vector_store.search` calls
 - Assert malformed output, a single line identical to the original, and a

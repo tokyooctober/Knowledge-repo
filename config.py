@@ -123,7 +123,13 @@ MAX_CHUNKS_PER_ARTICLE = 3
 MIN_SCORE_THRESHOLD = 0.35
 ENABLE_QUERY_REWRITING = False
 ENABLE_HYBRID_SEARCH = False
-ENABLE_QUERY_DECOMPOSITION = True
+# Off: measured across all 50 eval questions, decomposition changed the result on ZERO of
+# them while costing ~2.2 s/query, because _merge_by_holistic_rank appends subquery finds
+# behind a holistic list that already fills RERANK_POOL — so they are sliced off before the
+# reranker sees them. Giving them slots (RRF, or simply reserving 12) gains a net one question
+# in fifty: 2 better, 1 worse. That is a coin flip, not a result.
+# Re-enabling this without first fixing the merge will reproduce the no-op exactly.
+ENABLE_QUERY_DECOMPOSITION = False
 MAX_SUBQUERIES = 4          # cap on LLM-decided subquery fan-out
 MIN_DECOMPOSITION_WORDS = 6  # below this word count, skip decomposition (cheap cost gate)
 HOLISTIC_OVERFETCH = 8      # x top_k for the original query's own search when decomposing:
