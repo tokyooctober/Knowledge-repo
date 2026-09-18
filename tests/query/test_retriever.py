@@ -650,6 +650,33 @@ def test_rerank_scores_at_most_rerank_pool_candidates(wire, with_reranker, monke
     assert len(fake.pairs_seen) == 4
 
 
+def test_rerank_pool_depth_survives_a_query_that_does_not_decompose(wire, with_reranker):
+    """The reranker needs RERANK_POOL candidates to do better than not reranking at all
+    (measured 0.550 recall at depth 12 vs 0.750 at 48). Decomposition not firing — a short
+    query, a single-topic one, or a failed LLM call — must not shrink the pool underneath it."""
+    with_reranker()
+    store = wire([_result("a", 0.9)])
+    rt.retrieve("short query", top_k=6)  # 2 words: below MIN_DECOMPOSITION_WORDS
+    assert store.search_calls[0]["top_k"] == rt.RERANK_POOL
+
+
+def test_rerank_pool_depth_holds_when_decomposition_is_disabled(wire, with_reranker, monkeypatch):
+    """Turning decomposition off to save its LLM call must not quietly degrade retrieval."""
+    monkeypatch.setattr(rt, "ENABLE_QUERY_DECOMPOSITION", False)
+    with_reranker()
+    store = wire([_result("a", 0.9)])
+    rt.retrieve(_LONG_QUERY, top_k=6)
+    assert store.search_calls[0]["top_k"] == rt.RERANK_POOL
+
+
+def test_pool_depth_unchanged_when_reranking_is_off(wire):
+    """Without a reranker the old over-fetch is all the post-filter needs — no reason to pay
+    for a wider search."""
+    store = wire([_result("a", 0.9)])
+    rt.retrieve("short query", top_k=6)
+    assert store.search_calls[0]["top_k"] == 12
+
+
 def test_rerank_passes_the_configured_batch_size(wire, with_reranker):
     """Batch size is a VRAM and latency guarantee, not a detail: chunks vary in length, so a
     large batch pads every pair to its longest member — measured 909 MiB of activations and

@@ -198,6 +198,17 @@ def _merge_by_holistic_rank(
     return list(holistic) + tail
 
 
+def _pool_depth(top_k: int, decomposed: bool) -> int:
+    """How many candidates to fetch. Whoever consumes the pool sets the floor: the reranker
+    needs `RERANK_POOL` to work well (measured far worse at 12 than at 48), and that need is
+    unrelated to whether the query happened to decompose — so decomposition must not be able
+    to shrink the pool out from under it. Without this floor, a query under
+    `MIN_DECOMPOSITION_WORDS`, one the LLM declines to split, or a failed decomposition call
+    would all silently fall back to a depth the reranker does badly at."""
+    depth = top_k * (HOLISTIC_OVERFETCH if decomposed else 2)
+    return max(depth, RERANK_POOL) if ENABLE_RERANK else depth
+
+
 def retrieve(
     query: str,
     top_k: int = DEFAULT_TOP_K,
@@ -218,7 +229,7 @@ def retrieve(
     subqueries = _decompose_query(query)
     holistic = store.search(
         query_vector=embed_query(query),
-        top_k=top_k * (HOLISTIC_OVERFETCH if subqueries else 2),
+        top_k=_pool_depth(top_k, bool(subqueries)),
         filters=filters,
     )
     if subqueries:
