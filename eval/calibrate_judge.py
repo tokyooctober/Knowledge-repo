@@ -137,9 +137,11 @@ def _summary_md(p: dict) -> str:
         f"# Judge calibration — {p['scored_at']}",
         "",
         f"- labels: `{p['labels_file']}` ({p['n_rows']} rows)",
-        f"- **best judge: `{p['best_judge']}`** (combined agreement {p['best_combined_agreement']})",
+        f"- **best judge: `{p['best_judge']}`** "
+        f"(combined agreement {p['best_combined_agreement']})",
         "",
-        "| judge | faithfulness agree@0.5 | faithfulness r | answer_correctness agree@0.5 | answer_correctness r | combined |",
+        "| judge | faithfulness agree@0.5 | faithfulness r "
+        "| answer_correctness agree@0.5 | answer_correctness r | combined |",
         "|---|---|---|---|---|---|",
     ]
     for j in p["judges"]:
