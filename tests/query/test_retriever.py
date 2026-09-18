@@ -115,11 +115,13 @@ class FakeReranker:
         self._scores = scores_by_chunk or {}
         self._error = error
         self.pairs_seen: list[tuple[str, str]] = []
+        self.batch_size_seen: int | None = None
 
-    def predict(self, pairs, show_progress_bar=False):
+    def predict(self, pairs, batch_size=32, show_progress_bar=False):
         if self._error is not None:
             raise self._error
         self.pairs_seen = list(pairs)
+        self.batch_size_seen = batch_size
         return [self._scores.get(text.removeprefix("text "), 0.0) for _, text in pairs]
 
 
@@ -646,6 +648,16 @@ def test_rerank_scores_at_most_rerank_pool_candidates(wire, with_reranker, monke
     wire([_result(f"c{i}", 0.9 - i * 0.001, url=f"https://example.com/{i}") for i in range(20)])
     rt.retrieve("q", top_k=6)
     assert len(fake.pairs_seen) == 4
+
+
+def test_rerank_passes_the_configured_batch_size(wire, with_reranker):
+    """Batch size is a VRAM and latency guarantee, not a detail: chunks vary in length, so a
+    large batch pads every pair to its longest member — measured 909 MiB of activations and
+    1898 ms at batch 32 versus 228 MiB and 1761 ms at batch 8."""
+    fake = with_reranker()
+    wire([_result(f"c{i}", 0.9 - i * 0.01, url=f"https://example.com/{i}") for i in range(4)])
+    rt.retrieve("q", top_k=3)
+    assert fake.batch_size_seen == rt.RERANK_BATCH_SIZE
 
 
 def test_rerank_skipped_when_fewer_than_two_candidates(wire, with_reranker):

@@ -27,6 +27,7 @@ from config import (
     MAX_SUBQUERIES,
     MIN_DECOMPOSITION_WORDS,
     MIN_SCORE_THRESHOLD,
+    RERANK_BATCH_SIZE,
     RERANK_MAX_LENGTH,
     RERANK_MODEL,
     RERANK_POOL,
@@ -92,7 +93,9 @@ def _rerank(query: str, candidates: list[SearchResult]) -> list[SearchResult]:
         return candidates
     try:
         scores = _get_reranker().predict(
-            [(query, c.text) for c in head], show_progress_bar=False
+            [(query, c.text) for c in head],
+            batch_size=RERANK_BATCH_SIZE,
+            show_progress_bar=False,
         )
     except Exception:  # noqa: BLE001 - reranking is an optimisation, never a hard dependency
         log.warning(

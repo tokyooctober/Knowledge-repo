@@ -138,6 +138,10 @@ RERANK_MODEL = "BAAI/bge-reranker-v2-m3"  # 8192-token context; 512-limit rerank
                                           # ~69% of (query, chunk) pairs and lose recall
 RERANK_POOL = 48            # candidates scored per query — past this, latency outruns the gain
 RERANK_MAX_LENGTH = 1024    # covers the ~610-token worst-case pair without truncating
+RERANK_BATCH_SIZE = 8       # chunks vary in length, so a big batch pads every pair up to its
+                            # longest member and wastes the compute. Measured on 48 pairs:
+                            # batch 32 = 909 MiB activations / 1898 ms, batch 8 = 228 MiB /
+                            # 1761 ms — smaller is both leaner and faster here.
 
 # ── Answer generation ────────────────────────────────────────────────────────
 MAX_OUTPUT_TOKENS = 1024
