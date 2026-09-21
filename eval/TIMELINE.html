@@ -1,0 +1,965 @@
+<title>Knowledge-repo Retrieval Log</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,600;1,6..72,400&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root {
+    --bg: #f6f7fa;
+    --surface: #ffffff;
+    --surface-2: #eef0f5;
+    --ink: #161a21;
+    --muted: #5d6675;
+    --line: #dce0e8;
+    --line-strong: #c3c9d5;
+    --accent: #2f4b8f;
+    --accent-soft: #e6ebf7;
+    --neg: #9c3a2d;
+    --neg-soft: #f8e9e6;
+    --pos: #1c6553;
+    --pos-soft: #e3f0ec;
+    --warn: #86590f;
+    --warn-soft: #f7eeda;
+    --shadow: 0 1px 2px rgba(22, 26, 33, .06), 0 8px 24px -16px rgba(22, 26, 33, .28);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #11141a;
+      --surface: #181c24;
+      --surface-2: #1f242e;
+      --ink: #e7eaf1;
+      --muted: #98a1b1;
+      --line: #282e39;
+      --line-strong: #39414f;
+      --accent: #9db4ea;
+      --accent-soft: #1d2537;
+      --neg: #e3a095;
+      --neg-soft: #2d1d1a;
+      --pos: #86c9b5;
+      --pos-soft: #14271f;
+      --warn: #d9b268;
+      --warn-soft: #2a2114;
+      --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .8);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #11141a;
+    --surface: #181c24;
+    --surface-2: #1f242e;
+    --ink: #e7eaf1;
+    --muted: #98a1b1;
+    --line: #282e39;
+    --line-strong: #39414f;
+    --accent: #9db4ea;
+    --accent-soft: #1d2537;
+    --neg: #e3a095;
+    --neg-soft: #2d1d1a;
+    --pos: #86c9b5;
+    --pos-soft: #14271f;
+    --warn: #d9b268;
+    --warn-soft: #2a2114;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 24px -16px rgba(0, 0, 0, .8);
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap {
+    max-width: 860px;
+    margin: 0 auto;
+    padding-inline: 20px;
+    padding-block: 56px 88px;
+  }
+  h1, h2, h3 {
+    font-family: Newsreader, Georgia, "Times New Roman", serif;
+    font-weight: 600;
+    text-wrap: balance;
+    margin: 0;
+    letter-spacing: -.01em;
+  }
+  h1 { font-size: clamp(2rem, 6vw, 3rem); line-height: 1.08; }
+  h2 { font-size: clamp(1.4rem, 4vw, 1.85rem); line-height: 1.15; }
+  h3 { font-size: 1.14rem; line-height: 1.3; }
+  p { margin: 0; }
+  a { color: var(--accent); }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .72rem;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .lede {
+    font-size: 1.12rem;
+    color: var(--muted);
+    max-width: 62ch;
+  }
+  .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .86em;
+    background: var(--surface-2);
+    border-radius: 3px;
+    padding: .1em .34em;
+  }
+
+  /* ---------- masthead ---------- */
+  header.masthead { display: flex; flex-direction: column; gap: 18px; }
+  .rule { height: 1px; background: var(--line); border: 0; margin: 0; }
+  .facts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 28px;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .78rem;
+    color: var(--muted);
+    padding-block: 14px;
+    border-top: 1px solid var(--line);
+    border-bottom: 1px solid var(--line);
+  }
+  .facts b { color: var(--ink); font-weight: 500; }
+
+  .headline-band {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 1px;
+    background: var(--line);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .headline-band > div {
+    background: var(--surface);
+    padding: 18px 18px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .figure {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 1.5rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.02em;
+  }
+  .figure.up { color: var(--pos); }
+  .figure.flat { color: var(--muted); }
+  .figure-label { font-size: .82rem; color: var(--muted); line-height: 1.35; }
+
+  /* ---------- timeline spine ---------- */
+  .phase { margin-top: 64px; }
+  .phase-head { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+  .phase-num {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .72rem;
+    letter-spacing: .14em;
+    color: var(--accent);
+  }
+  .phase-dates { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .78rem; color: var(--muted); }
+  .phase-intro { color: var(--muted); max-width: 64ch; margin-top: 10px; }
+
+  .spine {
+    border-left: 1px solid var(--line-strong);
+    margin-top: 28px;
+    padding-left: 26px;
+    display: flex;
+    flex-direction: column;
+    gap: 34px;
+  }
+  .entry { position: relative; display: flex; flex-direction: column; gap: 10px; }
+  .entry::before {
+    content: "";
+    position: absolute;
+    left: -30px;
+    top: 9px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--bg);
+    border: 1.5px solid var(--line-strong);
+  }
+  .entry[data-verdict="falsified"]::before { border-color: var(--neg); background: var(--neg); }
+  .entry[data-verdict="confirmed"]::before { border-color: var(--pos); background: var(--pos); }
+  .entry[data-verdict="corrected"]::before { border-color: var(--warn); background: var(--warn); }
+  .entry[data-verdict="shipped"]::before { border-color: var(--accent); background: var(--accent); }
+
+  .entry-top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 12px; }
+  .stamp {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .74rem;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .chip {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .66rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    padding: 2px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+  }
+  .chip.falsified { background: var(--neg-soft); color: var(--neg); }
+  .chip.confirmed { background: var(--pos-soft); color: var(--pos); }
+  .chip.corrected { background: var(--warn-soft); color: var(--warn); }
+  .chip.shipped { background: var(--accent-soft); color: var(--accent); }
+
+  .hx { display: flex; flex-direction: column; gap: 7px; margin-top: 2px; }
+  .hx-row { display: grid; grid-template-columns: 88px 1fr; gap: 14px; align-items: start; }
+  .hx-key {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .68rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding-top: .32em;
+  }
+  .hx-val { max-width: 62ch; }
+  .hx-row.result .hx-val { color: var(--ink); }
+
+  .pull {
+    border-left: 2px solid var(--accent);
+    background: var(--accent-soft);
+    padding: 12px 16px;
+    border-radius: 0 5px 5px 0;
+    font-size: .97rem;
+    max-width: 64ch;
+  }
+  .pull strong { font-weight: 600; }
+
+  /* ---------- tables ---------- */
+  .tablewrap { overflow-x: auto; margin-top: 4px; }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 440px;
+    font-size: .88rem;
+    font-variant-numeric: tabular-nums;
+  }
+  caption {
+    text-align: left;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .7rem;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding-bottom: 8px;
+  }
+  th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; padding-left: 0; }
+  th:last-child, td:last-child { padding-right: 0; }
+  thead th {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .7rem;
+    font-weight: 500;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom-color: var(--line-strong);
+  }
+  tbody td { font-family: "IBM Plex Mono", ui-monospace, monospace; }
+  tbody td:first-child { font-family: "IBM Plex Sans", system-ui, sans-serif; }
+  tr.win td { color: var(--pos); }
+  tr.win td:first-child { color: var(--ink); font-weight: 500; }
+  td.dim, .dim { color: var(--muted); }
+
+  /* ---------- final chart ---------- */
+  .chart { display: flex; flex-direction: column; gap: 14px; margin-top: 22px; }
+  .bar-row { display: grid; grid-template-columns: 148px 1fr; gap: 16px; align-items: center; }
+  .bar-name { font-size: .84rem; }
+  .bar-name span { display: block; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .68rem; color: var(--muted); }
+  .track { display: flex; flex-direction: column; gap: 4px; }
+  .bar { display: flex; align-items: center; gap: 8px; }
+  .bar i {
+    display: block;
+    height: 9px;
+    border-radius: 2px;
+    background: var(--line-strong);
+    min-width: 2px;
+  }
+  .bar.now i { background: var(--accent); height: 11px; }
+  .bar b {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .74rem;
+    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+  }
+  .bar.now b { color: var(--ink); }
+  .legend {
+    display: flex;
+    gap: 18px;
+    flex-wrap: wrap;
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .72rem;
+    color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 7px; }
+  .legend i { width: 14px; height: 9px; border-radius: 2px; display: inline-block; background: var(--line-strong); }
+  .legend i.now { background: var(--accent); }
+
+  .group-label {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: .7rem;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-top: 6px;
+  }
+
+  /* ---------- closing ---------- */
+  .closing { margin-top: 72px; padding-top: 30px; border-top: 2px solid var(--ink); }
+  .commits { display: flex; flex-direction: column; gap: 0; margin-top: 18px; }
+  .commit {
+    display: grid;
+    grid-template-columns: 86px 1fr;
+    gap: 16px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
+    font-size: .9rem;
+    align-items: baseline;
+  }
+  .commit .sha { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .8rem; color: var(--accent); }
+  footer { margin-top: 46px; font-size: .82rem; color: var(--muted); }
+
+  @media (max-width: 620px) {
+    .headline-band { grid-template-columns: 1fr; }
+    .hx-row { grid-template-columns: 1fr; gap: 2px; }
+    .hx-key { padding-top: 0; }
+    .bar-row { grid-template-columns: 1fr; gap: 6px; }
+    .commit { grid-template-columns: 1fr; gap: 2px; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+<div class="wrap">
+
+  <header class="masthead">
+    <p class="eyebrow">Knowledge-repo · RAG evaluation</p>
+    <h1>Fourteen days to a re-baselined retriever</h1>
+    <p class="lede">A decision log of the work between two full 50-question eval runs — what was hypothesised, what was measured, what got thrown away, and the one intervention that survived every guard.</p>
+    <div class="facts">
+      <span><b>2026-09-04 → 09-18</b> elapsed</span>
+      <span><b>50</b> frozen questions</span>
+      <span>judge <b>qwen2.5:14b-instruct</b></span>
+      <span><b>3</b> hypotheses falsified</span>
+      <span><b>1</b> shipped</span>
+    </div>
+  </header>
+
+  <section class="headline-band" style="margin-top:28px" aria-label="Final outcome">
+    <div>
+      <span class="figure up">+21%</span>
+      <span class="figure-label">recall@k<br>0.637 → 0.773</span>
+    </div>
+    <div>
+      <span class="figure up">+44%</span>
+      <span class="figure-label">mrr — the largest move, and the one nobody simulated<br>0.591 → 0.852</span>
+    </div>
+    <div>
+      <span class="figure flat">±0.03</span>
+      <span class="figure-label">all three answer-quality metrics — flat, inside the pre-registered threshold</span>
+    </div>
+  </section>
+
+  <!-- ============ PHASE 1 ============ -->
+  <section class="phase">
+    <div class="phase-head">
+      <span class="phase-num">PHASE 01</span>
+      <span class="phase-dates">2026-09-04 → 09-07</span>
+      <h2>Getting a test set worth grading against</h2>
+    </div>
+    <p class="phase-intro">Before anything could be measured, two questions had to be settled empirically rather than by reputation: which model writes the questions, and which model grades the answers.</p>
+
+    <div class="spine">
+
+      <article class="entry" data-verdict="falsified">
+        <div class="entry-top">
+          <span class="stamp">09-04 · 22:02</span>
+          <h3>A local model can generate the test set</h3>
+          <span class="chip falsified">blocked</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">Experiment</span><span class="hx-val"><code>build_testset.py --size 10</code> with <span class="mono">qwen2.5:14b-instruct</span>.</span></div>
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">Three import failures in a row — <code>eval</code>, <code>langchain_community…vertexai</code>, <code>frontmatter</code> — then a RAGAS parse failure and a timeout at <code>--size 2</code>. Nothing generated. A separate sampling bug surfaced: the script could reference articles that were never ingested, fixed with <code>--ingested-only</code>.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="corrected">
+        <div class="entry-top">
+          <span class="stamp">09-05 · 20:14</span>
+          <h3>The phi4 run that never happened</h3>
+          <span class="chip corrected">config error</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">The <code>.env</code> edit had only ever been pasted into chat, never written to disk, so the run silently used the default model. The log said <span class="mono">qwen2.5</span>; the intent said phi4. Verified against <code>ollama list</code> before retrying.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="falsified">
+        <div class="entry-top">
+          <span class="stamp">09-05 · 21:46</span>
+          <h3>phi4 can carry generation</h3>
+          <span class="chip falsified">falsified</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">Experiment</span><span class="hx-val">The real phi4 run — 60 samples over 40 source articles.</span></div>
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">45 minutes, all 60 rows written — but <strong>10 of 40 articles (25%) failed RAGAS's structured-output extraction</strong>. Not a crash; a quality failure. Verdict at the time: <em>phi4 isn't reliably producing the strict JSON RAGAS's knowledge-graph extractors require.</em> Kept for comparison, never used.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="shipped">
+        <div class="entry-top">
+          <span class="stamp">09-05 · 22:49–23:05</span>
+          <h3>claude-opus-5 generates clean, on the fourth attempt</h3>
+          <span class="chip shipped">adopted</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">Three fast failures first — a routing-label bug, then two API key fragments pasted together in <code>.env</code> (confirmed by a 401). The fourth attempt: <strong>~16 min, 0% extraction failures</strong>, of which only 2m12s was sample generation; the rest was building the knowledge graph. The next day, human review cut 60 candidates to <strong>50 accepted / 10 rejected</strong> and froze <code>testset.jsonl</code>.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="confirmed">
+        <div class="entry-top">
+          <span class="stamp">09-07</span>
+          <h3>Pick the judge by agreement, not by reputation</h3>
+          <span class="chip confirmed">measured</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">Experiment</span><span class="hx-val">Four candidate judges scored 32 jobs each against 16 hand-labelled rows. The first attempt died on <code>TimeoutError</code> almost everywhere — RAGAS defaults to ~16 concurrent calls against an Ollama server that serves one generation at a time. Fixed with <code>--max-workers</code> and an explicit timeout.</span></div>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <caption>Judge calibration · 16 hand-labelled rows</caption>
+            <thead><tr><th>Judge</th><th>faithfulness</th><th>correctness</th><th>combined</th><th>wall time</th></tr></thead>
+            <tbody>
+              <tr class="win"><td>qwen2.5:14b-instruct</td><td>1.000</td><td>0.750</td><td>0.875</td><td>16.5 min</td></tr>
+              <tr><td>openai/gpt-4o</td><td>1.000</td><td>0.625</td><td>0.812</td><td>3 min</td></tr>
+              <tr><td>phi4</td><td>1.000</td><td>0.625</td><td>0.812</td><td>19.5 min</td></tr>
+              <tr><td>mistral-small</td><td>1.000</td><td>0.562</td><td>0.781</td><td>84.5 min</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="hx-val dim" style="font-size:.88rem">The winner is free, local, and already the app's production answerer. mistral-small's 84 minutes was the first sighting of VRAM spillover on the 16 GB card — a constraint that returns in Phase 5.</p>
+      </article>
+
+      <article class="entry" data-verdict="shipped">
+        <div class="entry-top">
+          <span class="stamp">09-07 · 11:01</span>
+          <h3>The 09-07 baseline</h3>
+          <span class="chip shipped">baseline</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">Phase 1 (6.5 min) + Phase 2 (3 min) over all 50 frozen questions. Every number in the rest of this log is measured against this run.</span></div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ PHASE 2 ============ -->
+  <section class="phase">
+    <div class="phase-head">
+      <span class="phase-num">PHASE 02</span>
+      <span class="phase-dates">2026-09-14</span>
+      <h2>Re-testing a decision already made</h2>
+    </div>
+    <p class="phase-intro">A week later, the generator choice was re-opened: was the local model really worse, or had it just been unlucky?</p>
+
+    <div class="spine">
+      <article class="entry" data-verdict="confirmed">
+        <div class="entry-top">
+          <span class="stamp">09-14 · 50m55s</span>
+          <h3>Re-run generation on qwen2.5, same shape, separate file</h3>
+          <span class="chip confirmed">decision upheld</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">Decision</span><span class="hx-val">Identical parameters (<code>--size 60 --articles 40 --seed 7</code>), written to its own file so the frozen set could not be clobbered, and logged this time — the lesson from phi4, whose run left no log at all.</span></div>
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val"><strong>The same 10/40 failure rate as phi4.</strong> Two 14B-class models, one failure mode.</span></div>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <caption>Generator comparison</caption>
+            <thead><tr><th>Generator</th><th>duration</th><th>extraction failures</th><th>outcome</th></tr></thead>
+            <tbody>
+              <tr><td>qwen2.5:14b-instruct</td><td>50m 55s</td><td>10/40 (25%)</td><td class="dim">ran, flawed</td></tr>
+              <tr><td>phi4</td><td>~45 min</td><td>10/40 (25%)</td><td class="dim">ran, flawed</td></tr>
+              <tr class="win"><td>claude-opus-5</td><td>~16 min</td><td>0/40 (0%)</td><td>clean · frozen</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <!-- ============ PHASE 3 ============ -->
+  <section class="phase">
+    <div class="phase-head">
+      <span class="phase-num">PHASE 03</span>
+      <span class="phase-dates">2026-09-14 → 09-17</span>
+      <h2>Query decomposition, falsified three times</h2>
+    </div>
+    <p class="phase-intro">The hypothesis: splitting a compound question into sub-questions raises recall on the questions that need two or three source articles. It got three independent tests, each fairer than the last.</p>
+
+    <div class="spine">
+
+      <article class="entry" data-verdict="falsified">
+        <div class="entry-top">
+          <span class="stamp">Test 1 · n=50</span>
+          <h3>Turn it on and measure</h3>
+          <span class="chip falsified">regression</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">Every retrieval metric fell. context_recall 0.704 → 0.533, hit_rate 0.760 → 0.620, answer_relevancy 0.648 → 0.546. Even precision@k — the metric decomposition was built to raise — went down. Only faithfulness ticked up.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="corrected">
+        <div class="entry-top">
+          <span class="stamp">Root cause · revised twice</span>
+          <h3>Hairline scores, and what they turned out to mean</h3>
+          <span class="chip corrected">diagnosis revised</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">Read 1</span><span class="hx-val">Fragments <em>replace</em> the holistic query's search instead of adding to it, so chunks the full question found well are dropped by the score threshold.</span></div>
+          <div class="hx-row"><span class="hx-key">Read 2</span><span class="hx-val">Score data killed that. <code>MIN_SCORE_THRESHOLD = 0.35</code> <strong>never fires in production</strong> — all 120 observed scores sit between 0.6398 and 0.8304, and every question fills all six slots. Nothing is ever filtered; the contest is purely ordinal, and the margins are hairline.</span></div>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <caption>Score spread across the six chunks that won slots</caption>
+            <thead><tr><th>question</th><th>spread</th><th class="dim">interpretation</th></tr></thead>
+            <tbody>
+              <tr><td>q004</td><td>0.0207</td><td class="dim">all six winners inside 2 points</td></tr>
+              <tr><td>q007</td><td>0.0243</td><td class="dim"></td></tr>
+              <tr><td>q012</td><td>0.0288</td><td class="dim"></td></tr>
+              <tr><td>q009</td><td>0.0335</td><td class="dim"></td></tr>
+              <tr><td>q008</td><td>0.0363</td><td class="dim"></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Read 3</span><span class="hx-val">Then the ON and OFF score sets were compared directly for q004, and overturned read 2 as well.</span></div>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <caption>q004 · decomp OFF vs ON — the sets do not overlap</caption>
+            <thead><tr><th>arm</th><th>score range of the 6 kept chunks</th><th>gold article</th></tr></thead>
+            <tbody>
+              <tr class="win"><td>decomp OFF</td><td>0.6698 – 0.6905</td><td>present · 0.6714, rank 5</td></tr>
+              <tr><td>decomp ON</td><td>0.6398 – 0.6583</td><td class="dim">absent entirely</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pull">
+          <strong>It was never out-ranked.</strong> The merge kept the max score and sorted descending, so had the gold chunk surfaced in either fragment's results at anything ≥ 0.6583 it would have ranked <em>first</em>. Every ON score falls below every OFF score because the fragment searches never retrieved it at all. The holistic query is never searched, so anything only the whole question would have found is unreachable — and with all six slots always full, that loss is total and silent.
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">The proof</span><span class="hx-val">On q007 and q012 the fragment scores came back <em>higher</em> than the holistic ones — q007 ON at 0.7574–0.7867 against OFF at 0.7500–0.7743 — while retrieving <strong>worse</strong> context. Higher number, worse answer. These are cosine scores against different query vectors, so the scale never carried across them, which is exactly the assumption <code>_fuse()</code> was built on.</span></div>
+          <div class="hx-row"><span class="hx-key">Consequence</span><span class="hx-val">Saturation is the design, not the defect — so no fix may try to relieve it. Widening <code>top_k</code> games the @k metric; budgeting slots per subquery makes q004 worse by construction; reserving the holistic top-<em>m</em> fails because q004's gold ranked 5th of 6. Plain RRF fails too: gold at holistic rank 5 with no fragment support scores 1/(60+5) = 0.0154 and loses to anything ranking 3rd in two fragment lists at 2/(60+3) = 0.0317.</span></div>
+          <div class="hx-row result"><span class="hx-key">The rule</span><span class="hx-val"><strong>Fragments decide what gets considered; the original question decides what wins.</strong> Every contender measured against one vector — the user's actual question.</span></div>
+        </div>
+        <div class="pull">
+          <strong>The tests encoded the wrong mechanism.</strong> All three regression tests made the threshold the decisive lever — a lever production never pulls — and none of them saturated <code>top_k</code>, so the crowding-out path was literally unreachable. They asserted presence; production asks about survival against 23 competitors for 6 slots. They would have passed a fix that doesn't work, which is worse than having no tests at all.
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="confirmed">
+        <div class="entry-top">
+          <span class="stamp">Test 2 · n=10</span>
+          <h3>The additive fix — goal met on iteration 1 of 3</h3>
+          <span class="chip confirmed">goal met</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">Blocker</span><span class="hx-val">Raised before burning iterations: all ten smoke questions are single-source, and decomposition-OFF already scores 1.000 on hit_rate and recall there — <em>a ceiling that can be tied but not beaten.</em> The run went ahead with success redefined as "same or better".</span></div>
+          <div class="hx-row"><span class="hx-key">Change</span><span class="hx-val">Always search the original query, widened to <code>top_k × HOLISTIC_OVERFETCH</code> = 48; rank candidates by their score against the real question; delete <code>_fuse()</code>, which encoded the assumption that cosine scores are comparable across different queries.</span></div>
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">Every metric at or above baseline — but retrieval came back <strong>byte-identical to OFF on 10/10 questions</strong>, so the faithfulness gain could only be answerer nondeterminism, not the fix. Reported as such rather than banked.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="falsified">
+        <div class="entry-top">
+          <span class="stamp">Test 3 · n=22</span>
+          <h3>The multi-source slice — decomposition's home ground</h3>
+          <span class="chip falsified">null result</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">Decision</span><span class="hx-val">A bigger prefix was rejected: the test set is <strong>sorted by gold count</strong>, so multi-source questions all sit in rows 31–50 and <code>--limit 30</code> would mostly re-confirm known ties. A targeted 22-row slice of every 2+ gold question replaced it.</span></div>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <caption>22 multi-source questions · every question needs 2–3 articles</caption>
+            <thead><tr><th>arm</th><th>hit_rate@k</th><th>mrr</th><th>recall@k</th><th>precision@k</th></tr></thead>
+            <tbody>
+              <tr><td>decomp OFF</td><td>0.7273</td><td>0.5720</td><td>0.4470</td><td>0.1833</td></tr>
+              <tr><td>decomp ON — original</td><td>0.5909</td><td>0.5242</td><td>0.4167</td><td>0.1742</td></tr>
+              <tr><td>decomp ON — fixed</td><td>0.7273</td><td>0.5720</td><td>0.4470</td><td>0.1833</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">On the exact questions it was built for, the original implementation made things <em>worse</em>. The fixed version is byte-identical to OFF on 22/22 — despite firing on all 22 questions with 2–4 subqueries each. One LLM call plus several vector searches per query, for zero change in output.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="falsified">
+        <div class="entry-top">
+          <span class="stamp">Side quest</span>
+          <h3>Is slot competition the constraint?</h3>
+          <span class="chip falsified">falsified</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">No. 12 of 22 questions already return 6 distinct articles, 6 more return 5, and the per-article cap binds on only 3 of 22 — yet just 20 of 45 gold articles are found at all.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="falsified">
+        <div class="entry-top">
+          <span class="stamp">Asked in session</span>
+          <h3>"Could we use the metadata as a filter into the top_k?"</h3>
+          <span class="chip falsified">dud, but informative</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">The ask</span><span class="hx-val">Test whether the top 6 repeats articles, and if so, force one chunk per article to free slots.</span></div>
+          <div class="hx-row"><span class="hx-key">Checked</span><span class="hx-val">The assumption holds but is small — 10 of 22 questions repeat an article, consuming 15 of 132 slots (11%). Two corrections: the dedup key must be <code>article_url</code>, not <code>article_title</code> (URLs are the stable identity and what recall is scored by), and this isn't new machinery — <code>MAX_CHUNKS_PER_ARTICLE = 3</code> already does it, so the experiment is just setting that constant to 1.</span></div>
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">Fifteen slots freed, <strong>one</strong> extra gold article surfaced, precision@k down 13% relative. A dud.</span></div>
+        </div>
+        <div class="pull">
+          <strong>The failure was more useful than a success would have been.</strong> Fourteen of the fifteen freed slots filled with non-gold articles — so the missed gold isn't sitting just below the cutoff waiting for room. Slot-allocation policy only reshuffles who gets in from a candidate pool that mostly doesn't contain the answer. Which raises the question that actually discriminates: if they're not just below the line, <em>where are they?</em>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="confirmed">
+        <div class="entry-top">
+          <span class="stamp">The reframe</span>
+          <h3>Where the missing gold articles actually rank</h3>
+          <span class="chip confirmed">problem redefined</span>
+        </div>
+        <p class="hx-val">Before running it, each possible outcome was bound to a different fix — so the result would dictate the answer rather than be read to fit a preferred one.</p>
+        <div class="tablewrap">
+          <table>
+            <caption>Pre-registered · what each result would mean</caption>
+            <thead><tr><th>if gold sits at…</th><th>then the fix is</th></tr></thead>
+            <tbody>
+              <tr><td>ranks 7–48</td><td style="text-align:left">a reranker over the pool we already fetch</td></tr>
+              <tr><td>ranks 49–200</td><td style="text-align:left">a much wider pool <em>and</em> a reranker</td></tr>
+              <tr><td>beyond 200</td><td style="text-align:left">embedding or chunking — no retrieval policy helps</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <caption>Deep top-200 search · 45 gold articles pooled across the 22 multi-source questions</caption>
+            <thead><tr><th>rank band</th><th>count</th><th>share</th><th>reachable by</th></tr></thead>
+            <tbody>
+              <tr><td>1–6 · already retrieved</td><td>20</td><td>44.4%</td><td class="dim">—</td></tr>
+              <tr><td>7–12</td><td>3</td><td>6.7%</td><td class="dim">a slightly wider window</td></tr>
+              <tr class="win"><td>13–48</td><td>11</td><td>24.4%</td><td>reranking the pool we already fetch</td></tr>
+              <tr><td>49–200</td><td>8</td><td>17.8%</td><td class="dim">wider pool + reranker</td></tr>
+              <tr><td>beyond 200</td><td>3</td><td>6.7%</td><td class="dim">nothing retrieval-side</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="pull">
+          <strong>14 of the 25 misses were already inside the 48-candidate pool</strong> and being thrown away by the score-ordered trim to six. That makes this a ranking-quality problem — not an embedding problem, not a chunking problem, and not one that any amount of query splitting or slot reallocation can touch.
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">Read it as</span><span class="hx-val">A hypothesis-generator, not a verdict. It samples the multi-source slice only — single-source questions, where baseline recall is already 1.000, are excluded, so this is the distribution for hard questions rather than for all queries. At 45 observations, one article moving band shifts a share by ~2 points. What carries the conclusion is that its prediction then held out-of-sample: the reranker gain it forecast was confirmed at n=32 <em>with</em> single-source questions included, and again at n=50.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="shipped">
+        <div class="entry-top">
+          <span class="stamp">The bridge</span>
+          <h3>Why a cross-encoder, specifically</h3>
+          <span class="chip shipped">direction set</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">Theory</span><span class="hx-val">A cross-encoder scores the (query, chunk) pair <strong>jointly</strong>, in one forward pass, instead of comparing two embeddings computed independently of one another. That independence is the same defect already diagnosed upstream — it is why fragment scores of 0.7867 beat holistic scores of 0.7743 while retrieving worse context, and why a compound question's second topic gets buried. If independently-computed similarity is the weakness, joint scoring is the direct answer to it.</span></div>
+          <div class="hx-row"><span class="hx-key">Practicality</span><span class="hx-val"><code>sentence-transformers</code> was already a dependency and ships cross-encoders — no new stack, no re-ingest — and the 48-candidate pool was already being fetched. The first experiment cost nothing but a model download and a read-only simulation.</span></div>
+          <div class="hx-row result"><span class="hx-key">Sequence</span><span class="hx-val">Named as a one-line candidate when the n=22 arms came back null, then parked — <em>"finish current work"</em> — and picked up a session later: <em>"do a simulation of the reranking using your suggestion of query and chunk."</em></span></div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ PHASE 4 ============ -->
+  <section class="phase">
+    <div class="phase-head">
+      <span class="phase-num">PHASE 04</span>
+      <span class="phase-dates">2026-09-17</span>
+      <h2>Cross-encoder reranking — and one false positive on the way</h2>
+    </div>
+    <p class="phase-intro">A cross-encoder scores the query and the chunk <em>jointly</em>, rather than comparing two embeddings computed in isolation — precisely the weakness that buries a compound question's second topic.</p>
+
+    <div class="spine">
+
+      <article class="entry" data-verdict="corrected">
+        <div class="entry-top">
+          <span class="stamp">First result</span>
+          <h3>"The first intervention that actually works" — retracted one turn later</h3>
+          <span class="chip corrected">false positive</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">Claimed</span><span class="hx-val">MiniLM-L6 over the 48-pool lifted recall 0.447 → 0.530 on the multi-source slice, every metric up.</span></div>
+          <div class="hx-row result"><span class="hx-key">Retracted</span><span class="hx-val">Measured on the multi-source slice <em>alone</em> — the exact methodological error criticised one turn earlier. Adding four single-source questions turned the win into a wash: <strong>every reranker configuration degraded single-source recall</strong>, where the baseline is a perfect 1.000.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="corrected">
+        <div class="entry-top">
+          <span class="stamp">The harness, not the method</span>
+          <h3>69% of chunks were being scored with their tails cut off</h3>
+          <span class="chip corrected">artifact found</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">Chunks are 512 tokens by design, and all three candidate rerankers cap at 512 <em>architecturally</em> — <code>max_position_embeddings</code>, not a harness setting. Median pair length for the bge models was 550 tokens. The regression was truncation.</span></div>
+          <div class="hx-row"><span class="hx-key">Fix</span><span class="hx-val">Re-run on <span class="mono">bge-reranker-v2-m3</span> — an 8192-token context, so zero truncation.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="confirmed">
+        <div class="entry-top">
+          <span class="stamp">n=10 → n=32</span>
+          <h3>The first result to survive the single-source guard</h3>
+          <span class="chip confirmed">replicated</span>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <caption>Ablation at n=32 · 22 multi-source + 10 single-source</caption>
+            <thead><tr><th>arm</th><th>ALL recall</th><th>ALL hit</th><th>MULTI recall</th><th>SINGLE recall</th></tr></thead>
+            <tbody>
+              <tr><td>A1 baseline cosine @48</td><td>0.620</td><td>0.812</td><td>0.447</td><td>1.000</td></tr>
+              <tr class="win"><td>A2 cross-encoder @48</td><td>0.740</td><td>0.906</td><td>0.621</td><td>1.000</td></tr>
+              <tr><td>A3 RRF(cosine, CE) k=10</td><td>0.708</td><td>0.875</td><td>0.576</td><td>1.000</td></tr>
+              <tr><td>A4 RRF(holistic, subquery)</td><td>0.620</td><td>0.781</td><td>0.492</td><td class="dim">0.900</td></tr>
+              <tr><td>A5 RRF → cross-encoder</td><td>0.755</td><td>0.906</td><td>0.644</td><td>1.000</td></tr>
+              <tr><td class="dim">oracle @48</td><td class="dim">0.833</td><td class="dim">0.906</td><td class="dim">0.758</td><td class="dim">1.000</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Held up</span><span class="hx-val">The cross-encoder replicates at 3× the sample, single-source untouched at 1.000. Baseline MULTI of 0.447 matches the independent n=22 measurement exactly.</span></div>
+          <div class="hx-row"><span class="hx-key">Falsified</span><span class="hx-val">RRF blending was predicted to protect single-source. It doesn't need protecting, and blending actively dilutes correct promotions. A4 — decomposition's fairest possible test, fused by rank so the score-scale bug can't apply — lands exactly on baseline. <strong>Third null in a row.</strong></span></div>
+          <div class="hx-row"><span class="hx-key">Not banked</span><span class="hx-val">A5's +0.015 over A2 is about half a gold article across 32 questions. Flagged as indistinguishable from noise rather than called a winner.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="confirmed">
+        <div class="entry-top">
+          <span class="stamp">Depth &amp; cost</span>
+          <h3>There is no cheap sweet spot</h3>
+          <span class="chip confirmed">measured</span>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <caption>Pool depth sweep · latency on an RTX 5060 Ti</caption>
+            <thead><tr><th>candidates reranked</th><th>latency</th><th>ALL recall</th><th>SINGLE recall</th></tr></thead>
+            <tbody>
+              <tr><td>none</td><td>~0 ms</td><td>0.650</td><td>1.000</td></tr>
+              <tr><td>12</td><td>473 ms</td><td class="dim">0.550</td><td class="dim">0.750</td></tr>
+              <tr><td>24</td><td>968 ms</td><td>0.700</td><td>1.000</td></tr>
+              <tr class="win"><td>48</td><td>1844 ms</td><td>0.750</td><td>1.000</td></tr>
+              <tr><td>200</td><td>7398 ms</td><td class="dim">0.700</td><td>1.000</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">Returns are near-linear at ~38 ms per pair, so halving the latency halves the benefit. Twelve candidates scores <em>below doing nothing</em> — too shallow a pool means the reranker demotes correct chunks without better alternatives to promote. Going deeper hurts too: more distractors to misrank. <strong>48 or nothing.</strong></span></div>
+          <div class="hx-row"><span class="hx-key">Provenance</span><span class="hx-val">Asked where 48 came from, the honest answer was: arbitrary. It was <code>top_k × 8</code> from the decomposition fix — "start at 8" — and every later experiment inherited it because it was already being fetched. The rank-band diagnostic justified it afterwards (48 captures 76% of gold, 12 captures 51%), and latency caps the usable range anyway. <em>Best tested value, not a proven optimum.</em></span></div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ PHASE 5 ============ -->
+  <section class="phase">
+    <div class="phase-head">
+      <span class="phase-num">PHASE 05</span>
+      <span class="phase-dates">2026-09-17 → 09-18</span>
+      <h2>Making it deployable on one 16 GB card</h2>
+    </div>
+    <p class="phase-intro">The quality case was settled at n=32. The deployment case — latency, VRAM, cold start — was the harder half, and it surfaced a bug the eval could never have caught.</p>
+
+    <div class="spine">
+
+      <article class="entry" data-verdict="shipped">
+        <div class="entry-top">
+          <span class="stamp">Part A</span>
+          <h3>Ship the reranker; verify against the prototype</h3>
+          <span class="chip shipped">shipped</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">401 tests green, and the shipped <code>retrieve()</code> reproduced the A2 prototype numbers to four decimals. It also surfaced two real CUDA OOM warnings — 171 MB free on a 16 GB card — and showed that of 4.20 s of retrieval, <strong>decomposition was 2.2 s of it, the larger half, buying nothing.</strong></span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="corrected">
+        <div class="entry-top">
+          <span class="stamp">VRAM</span>
+          <h3>Smaller batches are both leaner and faster</h3>
+          <span class="chip corrected">framing corrected</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">The default batch of 32 was the worst cell on both axes: with variable-length inputs every pair pads to the longest chunk in the batch. Batch 8 saves 681 MiB of peak VRAM <em>and</em> ~137 ms. And <code>expandable_segments:True</code> addresses the real OOM cause — a 365 MB allocation failing with 171 MB free is fragmentation, not exhaustion.</span></div>
+          <div class="hx-row"><span class="hx-key">Retracted</span><span class="hx-val">The earlier "~14.7 GB permanently co-resident" warning was wrong: nothing is permanently resident. Ollama unloads after a five-minute keep-alive, and all three models coexist only during an active query.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="shipped">
+        <div class="entry-top">
+          <span class="stamp">Pool depth</span>
+          <h3>A bug found by reading code, because no measurement could find it</h3>
+          <span class="chip shipped">fixed</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">Bug</span><span class="hx-val">Pool size was decided by whether decomposition happened to fire: 48 candidates if the question split, 12 if it didn't. The reranker's needs never entered into it.</span></div>
+          <div class="hx-row result"><span class="hx-key">Why invisible</span><span class="hx-val">No question in the test set is under six words — the shortest is 11, the median 29 — because RAGAS writes verbose synthetic questions. Real people type <em>"why is gold up?"</em>. <strong>Every eval question takes the 48 path, so no measurement on this test set can detect the problem.</strong></span></div>
+          <div class="hx-row"><span class="hx-key">The trap</span><span class="hx-val">Disabling a feature that measurably does nothing would have silently dropped every query to 12 candidates — worse than no reranking at all — and it would have looked like the reranker's fault.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="falsified">
+        <div class="entry-top">
+          <span class="stamp">Part B · n=50</span>
+          <h3>Decomposition's last test, then off</h3>
+          <span class="chip falsified">disabled</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Result</span><span class="hx-val">Across all 50 questions the shipped merge differs from not decomposing at all on <strong>zero</strong> of them. Repaired variants gain a net one question in fifty — two better, one worse, a coin flip. RRF and simple slot reservation produce identical metrics, so the fusion machinery and its tuning parameter buy nothing over holding 12 slots open.</span></div>
+          <div class="hx-row"><span class="hx-key">Verdict</span><span class="hx-val">Technically it passed the pre-registered criterion — which was then stated plainly to have been written without a minimum effect size, and this effect falls below what it implicitly assumed was meaningful. Disabled: ~2.2 s on 94% of queries for a coin-flip-level gain.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="shipped">
+        <div class="entry-top">
+          <span class="stamp">Cold start</span>
+          <h3>The embedder costs more than the reranker</h3>
+          <span class="chip shipped">35.4 s → 15.4 s</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Measured</span><span class="hx-val">BGE embedder first load 11.56 s; reranker load 6.13 s; Qdrant first search 1.19 s; Ollama completion 3.92 s. The expectation had been the reverse. ~18.9 s is once per process; only ~3.7 s recurs.</span></div>
+          <div class="hx-row"><span class="hx-key">Decision</span><span class="hx-val">Synchronous in-process pre-warm behind a visible spinner — an honest "Loading models…" beats a fast-looking app that then hangs for 20 s. Raising <code>OLLAMA_KEEP_ALIVE</code> was rejected: ~9 GB held permanently to save 3.7 s re-creates exactly the headroom pressure just resolved.</span></div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <!-- ============ PHASE 6 ============ -->
+  <section class="phase">
+    <div class="phase-head">
+      <span class="phase-num">PHASE 06</span>
+      <span class="phase-dates">2026-09-18</span>
+      <h2>The full 50-question re-baseline</h2>
+    </div>
+    <p class="phase-intro">Phase 1 reproduced the Part B measurement to four decimals — confirmation that the harness and the simulation agree — which is what made the three-hour scoring run worth starting. Phase 2: 2 h 48 m, zero errors, zero timeouts.</p>
+
+    <div class="chart" role="img" aria-label="Nine metrics compared between the 2026-09-07 baseline and the 2026-09-18 run. All six retrieval metrics improved substantially; the three answering metrics are flat.">
+      <p class="group-label">Retrieval — large, unambiguous gains</p>
+
+      <div class="bar-row">
+        <div class="bar-name">context_precision<span>+0.081</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:86.4%"></i><b>0.864</b></div>
+          <div class="bar now"><i style="width:94.5%"></i><b>0.945</b></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">context_recall<span>+0.098</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:70.4%"></i><b>0.704</b></div>
+          <div class="bar now"><i style="width:80.2%"></i><b>0.802</b></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">hit_rate@k<span>+0.120</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:76.0%"></i><b>0.760</b></div>
+          <div class="bar now"><i style="width:88.0%"></i><b>0.880</b></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">mrr<span>+0.261 · +44%</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:59.1%"></i><b>0.591</b></div>
+          <div class="bar now"><i style="width:85.2%"></i><b>0.852</b></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">recall@k<span>+0.136</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:63.7%"></i><b>0.637</b></div>
+          <div class="bar now"><i style="width:77.3%"></i><b>0.773</b></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">precision@k<span>+0.057</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:18.1%"></i><b>0.181</b></div>
+          <div class="bar now"><i style="width:23.8%"></i><b>0.238</b></div>
+        </div>
+      </div>
+
+      <p class="group-label">Answering — flat</p>
+
+      <div class="bar-row">
+        <div class="bar-name">faithfulness<span>+0.031</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:87.5%"></i><b>0.875</b></div>
+          <div class="bar now"><i style="width:90.6%"></i><b>0.906</b></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">answer_relevancy<span>+0.010</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:64.8%"></i><b>0.648</b></div>
+          <div class="bar now"><i style="width:65.8%"></i><b>0.658</b></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">answer_correctness<span>−0.003</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:62.5%"></i><b>0.625</b></div>
+          <div class="bar now"><i style="width:62.2%"></i><b>0.622</b></div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span><i></i> 2026-09-07 baseline</span>
+        <span><i class="now"></i> 2026-09-18 · reranked</span>
+        <span class="dim">scale 0 → 1.0 · same 50 questions, same judge, 2 passes</span>
+      </div>
+    </div>
+
+    <div class="pull" style="margin-top:26px">
+      <strong>The bottleneck has moved from retrieval to generation.</strong> All three answering metrics sit inside the ±0.05 threshold set in advance — and the two scoring passes were unusually stable, with context_precision, context_recall and answer_relevancy identical to four decimals, against ±0.107 of wobble at n=22. So the flatness is a finding, not noise swamping a small gain. The right material is now reliably in front of the answerer; it just isn't producing better answers from it.
+    </div>
+
+    <p class="phase-intro" style="margin-top:20px">One number nobody predicted: <span class="mono">mrr</span> moved further than recall did. The reranker isn't only finding more gold articles — it's putting them near the top. Further retrieval work (the remaining 0.10 oracle gap, a recency prior, chunking) now has clearly diminishing returns; the constraint is the answerer, or the answer prompt.</p>
+  </section>
+
+  <!-- ============ CLOSING ============ -->
+  <section class="closing">
+    <span class="eyebrow">What the log is really about</span>
+    <h2 style="margin-top:10px">Measuring only where an intervention should help is how you get a false positive</h2>
+    <p class="lede" style="margin-top:14px">It happened twice, one turn apart — first with decomposition on the multi-source slice, then with the reranker on the same slice, by the same author who had just criticised it. Three devices eventually stopped it: a single-source guard on every measurement, an effect-size threshold written down <em>before</em> the run, and an oracle ceiling to say how much of the gap was ever reachable.</p>
+
+    <div class="commits">
+      <div class="commit"><span class="sha">78c8664</span><span>reranker batch size set explicitly; CUDA allocator flag documented</span></div>
+      <div class="commit"><span class="sha">c39d3a2</span><span>stop query decomposition from shrinking the reranker's candidate pool</span></div>
+      <div class="commit"><span class="sha">cf093cb</span><span>disable decomposition — it changed nothing on all 50 eval questions</span></div>
+      <div class="commit"><span class="sha">f742484</span><span>load models at startup so the first question isn't 20 s slower than the rest</span></div>
+      <div class="commit"><span class="sha">43981af</span><span>re-baseline METRICS.md on the post-reranking run</span></div>
+    </div>
+
+    <footer>Knowledge-repo · reconstructed from the session transcript, git history and the eval logs. Retrieval metrics are exact URL-overlap measures with no judge involved; the five RAGAS metrics were scored by qwen2.5:14b-instruct over two passes.</footer>
+  </section>
+
+</div>
