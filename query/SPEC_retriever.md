@@ -237,15 +237,40 @@ implausible.
 ---
 
 ## Hybrid Search (optional enhancement)
-If the collection is small (< 5000 chunks) and precision matters more than speed, combine vector search with BM25 keyword search:
+Dense search ranks chunks by what they are *about*. It struggles when one rare exact term is
+the whole question. In q004, "Kirkland Lake Gold" is the only word that separates the right
+chunk from five other "portfolio changes" chunks, all within 0.02 cosine. BM25 matches exact
+terms, so hybrid search runs both and fuses them. Off by default: set
+`ENABLE_HYBRID_SEARCH=true` (env or `.env`).
 
 ```
-vector_results = vector_store.search(query_vector, top_k=top_k*2)
-keyword_results = bm25_index.search(query, top_k=top_k*2)
-merged = reciprocal_rank_fusion(vector_results, keyword_results)
+dense  = vector_store.search(query_vector, top_k=HYBRID_FETCH)       # cosine
+sparse = vector_store.search_sparse(query_text, top_k=HYBRID_FETCH)  # BM25
+fused  = RRF(dense, sparse)        # sum 1/(RRF_K + rank); dense instance kept on overlap
+BM25-only chunks: .score = vector_store.score_by_ids(query_vector, ids)   # real cosine
+ENABLE_RERANK: fused[:RERANK_POOL] -> cross-encoder   # RRF picks the pool; tail dropped
+otherwise:     fused as is                            # RRF order is the final order
+-> the usual MIN_SCORE_THRESHOLD / MAX_CHUNKS_PER_ARTICLE / top_k loop
 ```
 
-`rank_bm25` library handles the keyword side. Not implemented by default — enable via `ENABLE_HYBRID_SEARCH = True`. Requires a separately maintained BM25 index (built from chunk texts at ingestion time).
+- **The BM25 index is a Qdrant sparse vector** named `bm25` on every point, with IDF applied
+  by Qdrant (`Modifier.IDF`), so it can't drift out of sync with the dense index. See
+  `storage/SPEC_vector_store.md`. A collection built before hybrid search lacks it:
+  `python -m scheduler.monthly_job --add-sparse` adds it once, and every later upsert writes
+  both vectors.
+- **Fuse by rank, never by score.** Cosine and BM25 scores are on unrelated scales. That
+  mistake is what broke `_fuse()` in the decomposition work.
+- **`.score` stays cosine.** RRF decides the order. A chunk only BM25 found is re-scored by
+  cosine against the query vector, so `MIN_SCORE_THRESHOLD` still means what it says, and
+  logged and eval scores stay comparable with dense-only runs.
+- **`HYBRID_FETCH` is the same with or without the reranker**, so in an A/B the reranker is
+  the only difference.
+- **No BM25 index → dense only**, with one warning per process. A missing index must never
+  take retrieval down, the same rule as the reranker fallback.
+- **RRF runs client-side**, not through Qdrant's `FusionQuery`. That returns RRF scores in
+  place of cosine and would break both rules above.
+- Not combined with decomposition. If both are on, the fused list takes the holistic list's
+  place and subquery finds append behind it, as before.
 
 ---
 
@@ -255,13 +280,15 @@ DEFAULT_TOP_K              = 6
 MAX_CHUNKS_PER_ARTICLE     = 3       # max results from a single article
 MIN_SCORE_THRESHOLD        = 0.35    # below this = not relevant
 ENABLE_QUERY_REWRITING     = False
-ENABLE_HYBRID_SEARCH       = False
+ENABLE_HYBRID_SEARCH       = False   # env-overridable; see Hybrid Search
+HYBRID_FETCH               = 48      # candidates from EACH of dense and BM25
+RRF_K                      = 60      # reciprocal rank fusion constant
 ENABLE_QUERY_DECOMPOSITION = False   # see "Currently OFF" note above
 MAX_SUBQUERIES             = 4       # cap on LLM-decided subquery fan-out
 MIN_DECOMPOSITION_WORDS    = 6       # below this word count, skip decomposition (cost gate)
 HOLISTIC_OVERFETCH         = 8       # x top_k for the original query's own search when
                                      # decomposing (see Query Decomposition)
-ENABLE_RERANK              = True
+ENABLE_RERANK              = True    # env-overridable (ENABLE_RERANK=false)
 RERANK_MODEL               = "BAAI/bge-reranker-v2-m3"   # 8192-token context
 RERANK_POOL                = 48      # candidates scored per query (~38 ms each)
 RERANK_MAX_LENGTH          = 1024    # covers the ~610-token worst-case pair

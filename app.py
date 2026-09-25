@@ -61,7 +61,8 @@ def run_query(
 
 
 def warm_models() -> dict[str, float]:
-    """Load the embedder, vector store and reranker before the first question arrives.
+    """Load the embedder, vector store, reranker and (if hybrid) BM25 encoder before the first
+    question arrives.
 
     Measured cold: embedder 11.6 s, reranker 6.1 s, first Qdrant search 1.2 s. All three are
     objects that live for the life of the process, so without this the first user question
@@ -73,8 +74,9 @@ def warm_models() -> dict[str, float]:
     VRAM. Warming is an optimisation, so a failure is logged and swallowed — the lazy path
     still works.
     """
-    from config import ENABLE_RERANK
+    from config import ENABLE_HYBRID_SEARCH, ENABLE_RERANK
     from ingestion.embedder import embed_query
+    from ingestion.sparse_encoder import encode_query
     from query.retriever import _get_reranker, _get_store
 
     def _warm_store():
@@ -85,6 +87,7 @@ def warm_models() -> dict[str, float]:
         ("embedder", lambda: embed_query("warm up")),
         ("vector_store", _warm_store),
         ("reranker", _get_reranker if ENABLE_RERANK else None),
+        ("bm25_encoder", (lambda: encode_query("warm up")) if ENABLE_HYBRID_SEARCH else None),
     ):
         if fn is None:
             continue

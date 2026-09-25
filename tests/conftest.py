@@ -8,6 +8,9 @@ otherwise reach a real model.
 from __future__ import annotations
 
 import hashlib
+import re
+import zlib
+from collections import Counter
 
 import pytest
 
@@ -84,3 +87,45 @@ def mock_vision_provider() -> MockVisionProvider:
 @pytest.fixture
 def mock_embedding_provider() -> MockEmbeddingProvider:
     return MockEmbeddingProvider()
+
+
+# ── BM25 ────────────────────────────────────────────────────────────────────
+
+
+def _terms(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", text.lower())
+
+
+def _term_id(term: str) -> int:
+    return zlib.crc32(term.encode()) & 0x7FFFFFFF
+
+
+def fake_encode_documents(texts: list[str]):
+    """Raw term counts per text — enough for "the chunk containing the query's words ranks
+    first" without fastembed's stemmer, stopword files or download."""
+    from qdrant_client import models
+
+    out = []
+    for text in texts:
+        counts = Counter(_term_id(t) for t in _terms(text))
+        out.append(
+            models.SparseVector(indices=list(counts), values=[float(v) for v in counts.values()])
+        )
+    return out
+
+
+def fake_encode_query(text: str):
+    from qdrant_client import models
+
+    ids = sorted({_term_id(t) for t in _terms(text)})
+    return models.SparseVector(indices=ids, values=[1.0] * len(ids))
+
+
+@pytest.fixture(autouse=True)
+def _fake_bm25_encoder(monkeypatch):
+    """Every VectorStore upsert computes BM25 vectors; never load the real encoder in tests."""
+    import storage.vector_store as vs
+
+    monkeypatch.setattr(vs, "encode_documents", fake_encode_documents)
+    monkeypatch.setattr(vs, "encode_query", fake_encode_query)
+    monkeypatch.setattr(vs, "token_length", lambda text: len(_terms(text)))

@@ -8,13 +8,20 @@ When query decomposition fires, the original query is still searched (wider, at
 `top_k * HOLISTIC_OVERFETCH`) and is what ranks the results — subquery searches only widen
 the candidate pool. See `_merge_by_holistic_rank`.
 
+With `ENABLE_HYBRID_SEARCH`, the candidate pool comes from two searches instead of one: dense
+(cosine) and BM25 (sparse), `HYBRID_FETCH` each, fused by reciprocal rank fusion. RRF decides
+the order; chunks only BM25 found are given their real cosine score, so `.score` is still
+cosine. See `_hybrid_candidates`.
+
 With `ENABLE_RERANK`, a cross-encoder then reorders the top `RERANK_POOL` candidates by
-scoring (query, chunk) jointly. It only reorders: `.score` stays cosine similarity.
+scoring (query, chunk) jointly. It only reorders: `.score` stays cosine similarity. With
+hybrid on, those `RERANK_POOL` are RRF's best, and the RRF tail below them is dropped.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 
 from config import (
     DEFAULT_TOP_K,
@@ -23,6 +30,7 @@ from config import (
     ENABLE_QUERY_REWRITING,
     ENABLE_RERANK,
     HOLISTIC_OVERFETCH,
+    HYBRID_FETCH,
     MAX_CHUNKS_PER_ARTICLE,
     MAX_SUBQUERIES,
     MIN_DECOMPOSITION_WORDS,
@@ -31,6 +39,7 @@ from config import (
     RERANK_MAX_LENGTH,
     RERANK_MODEL,
     RERANK_POOL,
+    RRF_K,
 )
 from ingestion.embedder import embed_query
 from llm_provider import ProviderConnectionError, get_embedding_provider, get_text_provider
@@ -58,6 +67,7 @@ _LEADING_MARKER = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s*")
 
 _store: VectorStore | None = None
 _reranker = None
+_warned_no_sparse = False
 
 
 def _get_store() -> VectorStore:
@@ -68,9 +78,10 @@ def _get_store() -> VectorStore:
 
 
 def _reset_store_for_tests() -> None:
-    global _store, _reranker
+    global _store, _reranker, _warned_no_sparse
     _store = None
     _reranker = None
+    _warned_no_sparse = False
 
 
 def _get_reranker():
@@ -198,6 +209,69 @@ def _merge_by_holistic_rank(
     return list(holistic) + tail
 
 
+def _rrf(ranked_lists: list[list[SearchResult]]) -> list[SearchResult]:
+    """Reciprocal rank fusion: each chunk scores sum 1/(RRF_K + rank) over the lists it
+    appears in, rank starting at 1. Scores from different lists (cosine, BM25) are on
+    different scales and are never compared — only ranks are. The first list's instance of a
+    chunk is kept, so pass the dense list first to keep its cosine `.score`. Ties keep
+    first-seen order."""
+    fused: dict[str, float] = {}
+    first: dict[str, SearchResult] = {}
+    for results in ranked_lists:
+        for rank, result in enumerate(results, 1):
+            fused[result.chunk_id] = fused.get(result.chunk_id, 0.0) + 1.0 / (RRF_K + rank)
+            first.setdefault(result.chunk_id, result)
+    order = sorted(fused, key=lambda cid: -fused[cid])
+    return [first[cid] for cid in order]
+
+
+def _hybrid_candidates(
+    store: VectorStore, query: str, query_vector: list[float], filters: dict | None
+) -> list[SearchResult] | None:
+    """Dense and BM25 top-`HYBRID_FETCH`, fused by RRF. `None` when the collection has no
+    BM25 index, and the caller falls back to dense only — a missing index must never take
+    retrieval down.
+
+    Chunks only BM25 found come back carrying a BM25 score. They are re-scored by cosine
+    against the query vector, so every result's `.score` means the same thing:
+    `MIN_SCORE_THRESHOLD` applies to them, and logs and eval output stay comparable with
+    dense-only runs."""
+    global _warned_no_sparse
+    if not store.has_sparse():
+        if not _warned_no_sparse:
+            log.warning(
+                "Hybrid search is on but the collection has no BM25 index — using vector "
+                "search. Run: python -m scheduler.monthly_job --add-sparse"
+            )
+            _warned_no_sparse = True
+        return None
+
+    dense = store.search(query_vector=query_vector, top_k=HYBRID_FETCH, filters=filters)
+    sparse = store.search_sparse(query, top_k=HYBRID_FETCH, filters=filters)
+    fused = _rrf([dense, sparse])
+
+    dense_ids = {r.chunk_id for r in dense}
+    bm25_only = [r.chunk_id for r in fused if r.chunk_id not in dense_ids]
+    cosine = store.score_by_ids(query_vector, bm25_only)
+    fused = [
+        r if r.chunk_id in dense_ids else replace(r, score=cosine.get(r.chunk_id, 0.0))
+        for r in fused
+    ]
+    log.info(
+        "Hybrid fusion",
+        extra={
+            "dense_count": len(dense),
+            "sparse_count": len(sparse),
+            "overlap": len(dense_ids & {r.chunk_id for r in sparse}),
+            "bm25_only_in_pool": sum(1 for r in fused[:RERANK_POOL] if r.chunk_id not in dense_ids),
+            "bm25_only_in_top_k": sum(
+                1 for r in fused[:DEFAULT_TOP_K] if r.chunk_id not in dense_ids
+            ),
+        },
+    )
+    return fused
+
+
 def _pool_depth(top_k: int, decomposed: bool) -> int:
     """How many candidates to fetch. Whoever consumes the pool sets the floor: the reranker
     needs `RERANK_POOL` to work well (measured far worse at 12 than at 48), and that need is
@@ -220,18 +294,27 @@ def retrieve(
         log.error("Empty query rejected", extra={"error_type": "ValueError"})
         raise ValueError("Query must not be empty")
 
-    if ENABLE_QUERY_REWRITING or ENABLE_HYBRID_SEARCH:  # pragma: no cover - optional, off
-        log.warning("Query rewriting / hybrid search are not implemented — using vector search")
+    if ENABLE_QUERY_REWRITING:  # pragma: no cover - optional, off
+        log.warning("Query rewriting is not implemented — using the query as given")
 
     store = _get_store()
     _guard_model(store)
 
     subqueries = _decompose_query(query)
-    holistic = store.search(
-        query_vector=embed_query(query),
-        top_k=_pool_depth(top_k, bool(subqueries)),
-        filters=filters,
+    query_vector = embed_query(query)
+    fused = (
+        _hybrid_candidates(store, query, query_vector, filters) if ENABLE_HYBRID_SEARCH else None
     )
+    if fused is not None:
+        # RRF picks the reranker's pool; its tail below RERANK_POOL is dropped, so every
+        # chunk the reranker can return is one RRF chose.
+        holistic = fused[:RERANK_POOL] if ENABLE_RERANK else fused
+    else:
+        holistic = store.search(
+            query_vector=query_vector,
+            top_k=_pool_depth(top_k, bool(subqueries)),
+            filters=filters,
+        )
     if subqueries:
         per_fragment = [
             store.search(query_vector=embed_query(sq), top_k=top_k * 2, filters=filters)
@@ -249,6 +332,7 @@ def retrieve(
             "max_score": raw[0].score if raw else None,
             "subquery_count": len(subqueries),
             "reranked": ENABLE_RERANK,
+            "hybrid": fused is not None,
         },
     )
 

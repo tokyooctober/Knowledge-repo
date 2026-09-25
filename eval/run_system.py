@@ -6,10 +6,17 @@ For every row in eval/dataset/testset.jsonl it calls the same `retrieve()` and
 
 Output: eval/results/run_<ts>.jsonl — one row per question:
     {id, user_input, response, retrieved_contexts, retrieved_urls, retrieved_scores,
-     reference, reference_contexts, source_urls, answer_model, num_sources}
+     reference, reference_contexts, source_urls, answer_model, num_sources,
+     retrieval_config}
+
+`retrieval_config` records the retrieval switches the run used (hybrid, rerank, ...), so a
+results file says which arm produced it. Switch arms with the env vars `config.py` reads:
 
     .venv/bin/python eval/run_system.py
     .venv/bin/python eval/run_system.py --top-k 8 --limit 5 --tag smoke
+    .venv/bin/python eval/run_system.py --ids q004,q022 --tag smoke
+    .venv/bin/python eval/run_system.py --min-sources 2 --tag ms     # the 22-row multi-source slice
+    ENABLE_HYBRID_SEARCH=true ENABLE_RERANK=false .venv/bin/python eval/run_system.py --tag hybrid
 """
 
 from __future__ import annotations
@@ -30,6 +37,10 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="run_system")
     ap.add_argument("--top-k", type=int, default=EVAL_TOP_K)
     ap.add_argument("--limit", type=int, help="only the first N questions (smoke test)")
+    ap.add_argument("--ids", help="comma-separated question ids to run, e.g. q004,q022")
+    ap.add_argument(
+        "--min-sources", type=int, help="only questions with at least N source articles"
+    )
     ap.add_argument("--tag", default="", help="label baked into the output filename")
     ap.add_argument("--testset", default=str(TESTSET_PATH))
     args = ap.parse_args(argv)
@@ -45,15 +56,32 @@ def main(argv: list[str] | None = None) -> int:
             f"No frozen test set at {args.testset} — "
             "run eval/build_testset.py then eval/review_testset.py"
         )
+    if args.ids:
+        wanted = [i.strip() for i in args.ids.split(",") if i.strip()]
+        unknown = sorted(set(wanted) - {r.get("id") for r in rows})
+        if unknown:
+            raise SystemExit(f"Not in {args.testset}: {', '.join(unknown)}")
+        rows = [r for r in rows if r.get("id") in set(wanted)]
+    if args.min_sources:
+        rows = [r for r in rows if len(r.get("source_urls", [])) >= args.min_sources]
     if args.limit:
         rows = rows[: args.limit]
 
+    import config
     from query.answerer import answer
     from query.retriever import retrieve
 
+    retrieval_config = {
+        "hybrid": config.ENABLE_HYBRID_SEARCH,
+        "rerank": config.ENABLE_RERANK,
+        "rrf_k": config.RRF_K,
+        "hybrid_fetch": config.HYBRID_FETCH,
+        "rerank_pool": config.RERANK_POOL,
+    }
+
     suffix = f"_{args.tag}" if args.tag else ""
     out = Path(RESULTS_DIR) / f"run_{ts()}{suffix}.jsonl"
-    print(f"Running {len(rows)} questions (top_k={args.top_k}) -> {out}")
+    print(f"Running {len(rows)} questions (top_k={args.top_k}, {retrieval_config}) -> {out}")
 
     t0 = time.time()
     for n, row in enumerate(rows, 1):
@@ -79,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
                 "source_urls": row.get("source_urls", []),
                 "answer_model": ans.model,
                 "num_sources": len(ans.sources),
+                "retrieval_config": retrieval_config,
             },
         )
         print(f"  [{n}/{len(rows)}] {len(results)} ctx, {len(ans.sources)} cited  · {q[:70]}")

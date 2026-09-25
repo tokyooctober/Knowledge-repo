@@ -31,6 +31,7 @@ openai>=1.30                 # "openai" and "openai_compat" backends; also Ollam
 
 # Storage
 qdrant-client>=1.9
+fastembed>=0.4               # BM25 sparse vectors for hybrid search (Qdrant/bm25)
 
 # LLM providers
 anthropic>=0.28              # LLM_BACKEND or VISION_BACKEND = "anthropic"

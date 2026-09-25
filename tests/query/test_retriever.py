@@ -73,8 +73,11 @@ class FakeTextProvider:
 @pytest.fixture(autouse=True)
 def _rerank_off_unless_asked(monkeypatch):
     """Reranking ships enabled, so default it off here: tests must not depend on the ambient
-    config value, and must never load the real cross-encoder. `with_reranker` re-enables it."""
+    config value, and must never load the real cross-encoder. `with_reranker` re-enables it.
+    Hybrid search is env-overridable, so pin it off too; `with_hybrid` turns it on."""
     monkeypatch.setattr(rt, "ENABLE_RERANK", False)
+    monkeypatch.setattr(rt, "ENABLE_HYBRID_SEARCH", False)
+    rt._reset_store_for_tests()
 
 
 @pytest.fixture
@@ -693,3 +696,121 @@ def test_rerank_skipped_when_fewer_than_two_candidates(wire, with_reranker):
     out = rt.retrieve("q", top_k=6)
     assert [r.chunk_id for r in out] == ["only"]
     assert fake.pairs_seen == []
+
+
+# ── hybrid search: BM25 + dense, fused by RRF ───────────────────────────────
+
+
+class HybridFakeStore(FakeStore):
+    """`dense` answers `search`, `sparse` answers `search_sparse`, and `cosine` (chunk_id ->
+    score) answers `score_by_ids` for chunks only BM25 found."""
+
+    def __init__(self, dense, sparse, cosine=None, sparse_enabled=True):
+        super().__init__(dense)
+        self._sparse = sparse
+        self._cosine = cosine or {}
+        self._sparse_enabled = sparse_enabled
+        self.sparse_calls: list[dict] = []
+        self.scored_ids: list[str] = []
+
+    def has_sparse(self):
+        return self._sparse_enabled
+
+    def search_sparse(self, query_text, top_k, filters):
+        self.sparse_calls.append({"query_text": query_text, "top_k": top_k, "filters": filters})
+        return list(self._sparse)
+
+    def score_by_ids(self, query_vector, chunk_ids):
+        self.scored_ids = list(chunk_ids)
+        return {c: self._cosine[c] for c in chunk_ids if c in self._cosine}
+
+
+@pytest.fixture
+def with_hybrid(wire, monkeypatch):
+    """Enable hybrid search; return a helper that installs a `HybridFakeStore`."""
+    monkeypatch.setattr(rt, "ENABLE_HYBRID_SEARCH", True)
+
+    def install(dense, sparse, cosine=None, sparse_enabled=True):
+        store = HybridFakeStore(dense, sparse, cosine, sparse_enabled)
+        monkeypatch.setattr(rt, "_get_store", lambda: store)
+        return store
+
+    return install
+
+
+def test_rrf_sums_reciprocal_ranks_and_keeps_the_first_lists_instance():
+    dense = [_result("a", 0.8), _result("b", 0.7), _result("c", 0.6)]
+    sparse = [_result("c", 11.0), _result("d", 9.0), _result("a", 5.0)]
+    fused = rt._rrf([dense, sparse])
+    # a and c: 1/61 + 1/63 each (tie → first seen); b and d: 1/62 each
+    assert [r.chunk_id for r in fused] == ["a", "c", "b", "d"]
+    assert fused[1].score == 0.6  # c keeps its dense (cosine) instance, not BM25's 11.0
+
+
+def test_hybrid_fetches_hybrid_fetch_from_both_searches(with_hybrid, monkeypatch):
+    monkeypatch.setattr(rt, "HYBRID_FETCH", 7)
+    store = with_hybrid([_result("a", 0.8)], [_result("a", 3.0)])
+    rt.retrieve("kirkland lake gold", top_k=6, filters={"tags": ["x"]})
+    assert store.search_args == {"top_k": 7, "filters": {"tags": ["x"]}}
+    assert store.sparse_calls == [
+        {"query_text": "kirkland lake gold", "top_k": 7, "filters": {"tags": ["x"]}}
+    ]
+
+
+def test_bm25_only_chunk_carries_its_cosine_score_not_its_bm25_score(with_hybrid):
+    store = with_hybrid(
+        [_result("a", 0.80, url="u/a")],
+        [_result("x", 14.2, url="u/x"), _result("a", 3.0, url="u/a")],
+        cosine={"x": 0.66},
+    )
+    out = rt.retrieve("q", top_k=6)
+    assert store.scored_ids == ["x"]  # only the chunk dense search did not return
+    assert {r.chunk_id: r.score for r in out} == {"a": 0.80, "x": 0.66}
+
+
+def test_bm25_only_chunk_below_threshold_is_dropped(with_hybrid, monkeypatch):
+    monkeypatch.setattr(rt, "MIN_SCORE_THRESHOLD", 0.5)
+    with_hybrid(
+        [_result("a", 0.8, url="u/a")], [_result("x", 20.0, url="u/x")], cosine={"x": 0.2}
+    )
+    assert [r.chunk_id for r in rt.retrieve("q", top_k=6)] == ["a"]
+
+
+def test_without_reranker_the_final_order_is_the_rrf_order(with_hybrid):
+    with_hybrid(
+        [_result("a", 0.9, url="u/a"), _result("b", 0.8, url="u/b")],
+        [_result("x", 9.0, url="u/x"), _result("a", 8.0, url="u/a")],
+        cosine={"x": 0.7},
+    )
+    # a: 1/61 + 1/62; x: 1/61; b: 1/62 (x before b: first seen in the fused dict order)
+    assert [r.chunk_id for r in rt.retrieve("q", top_k=3)] == ["a", "x", "b"]
+
+
+def test_with_reranker_only_rrfs_top_pool_reaches_the_reranker(
+    with_hybrid, with_reranker, monkeypatch
+):
+    monkeypatch.setattr(rt, "RERANK_POOL", 2)
+    with_hybrid(
+        [_result(c, 0.9, url=f"u/{c}") for c in ("a", "b", "c")],
+        [_result(c, 9.0, url=f"u/{c}") for c in ("d", "e", "f")],
+        cosine={"d": 0.7, "e": 0.7, "f": 0.7},
+    )
+    fake = with_reranker({"c": 5.0, "d": 1.0, "a": 0.5})  # c is best, but RRF ranked it 5th
+    out = rt.retrieve("q", top_k=6)
+    assert [text for _, text in fake.pairs_seen] == ["text a", "text d"]
+    assert [r.chunk_id for r in out] == ["d", "a"]  # reranked; the RRF tail was dropped
+
+
+def test_hybrid_falls_back_to_dense_when_the_collection_has_no_bm25_index(with_hybrid):
+    store = with_hybrid([_result("a", 0.8)], [_result("x", 9.0)], sparse_enabled=False)
+    out = rt.retrieve("q", top_k=6)
+    assert [r.chunk_id for r in out] == ["a"]
+    assert store.sparse_calls == []
+    assert store.search_args["top_k"] == 12  # the ordinary dense-only depth, top_k * 2
+
+
+def test_hybrid_off_never_calls_sparse_search(wire, monkeypatch):
+    store = HybridFakeStore([_result("a", 0.8)], [_result("x", 9.0)])
+    monkeypatch.setattr(rt, "_get_store", lambda: store)
+    rt.retrieve("q", top_k=6)
+    assert store.sparse_calls == []

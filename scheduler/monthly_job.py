@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import shutil
 import sys
 import time
 from dataclasses import dataclass
@@ -36,7 +37,7 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from config import CORPUS_INGEST_BATCH_ARTICLES, MD_CORPUS_DIR
+from config import CORPUS_INGEST_BATCH_ARTICLES, MD_CORPUS_DIR, QDRANT_PATH
 from ingestion import md_loader
 from ingestion.chunker import chunk_article, chunk_images, chunk_text, finalize_chunks
 from ingestion.embedder import embed_chunks
@@ -405,6 +406,38 @@ async def run_corpus_sync(
         db.close()
 
 
+# ── add sparse (BM25) vectors ──────────────────────────────────────────────
+
+
+def run_add_sparse(assume_yes: bool = False) -> dict:
+    """Give every indexed chunk a BM25 sparse vector, so hybrid search can run.
+
+    On a collection built before hybrid search this recreates the collection (see
+    `VectorStore.add_sparse_vectors`), so the embedded store is copied aside first.
+    Articles in the metadata DB are untouched — nothing is re-scraped or re-embedded."""
+    if not assume_yes:
+        if not sys.stdin.isatty():
+            log.error("Add-sparse refused — not a tty and --yes not passed")
+            return {"aborted": True}
+        print("About to rebuild the vector index with BM25 sparse vectors. Type 'yes': ")
+        if input().strip().lower() != "yes":
+            log.info("Add-sparse declined at prompt")
+            return {"aborted": True}
+
+    backup = None
+    if QDRANT_PATH and Path(QDRANT_PATH).exists():
+        store_dir = Path(QDRANT_PATH).resolve()
+        stamp = time.strftime("%Y%m%dT%H%M%S")
+        backup = str(store_dir.with_name(f"{store_dir.name}.pre-sparse-{stamp}"))
+        shutil.copytree(QDRANT_PATH, backup)  # before the client opens (and locks) it
+        log.info("Vector store copied", extra={"source": QDRANT_PATH, "backup": backup})
+
+    result = VectorStore().add_sparse_vectors()
+    result["backup"] = backup
+    print(result)
+    return result
+
+
 # ── reset ──────────────────────────────────────────────────────────────────
 
 
@@ -731,6 +764,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--force", action="store_true")
     p.add_argument("--prune", action="store_true")
     p.add_argument("--reset", action="store_true")
+    p.add_argument("--add-sparse", action="store_true", help="add BM25 vectors for hybrid search")
     p.add_argument("--yes", action="store_true", help="skip the --reset prompt")
     p.add_argument("--inspect", metavar="URL|PATH")
     p.add_argument("--stats", action="store_true")
@@ -755,6 +789,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.inspect:
         run_inspect(args.inspect)
+        return 0
+    if args.add_sparse:
+        run_add_sparse(assume_yes=args.yes)
         return 0
     if args.reset:
         asyncio.run(run_reset(assume_yes=args.yes))

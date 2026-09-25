@@ -60,7 +60,8 @@ Returns: `int` — number of points deleted
 ### Qdrant Point structure
 ```
 id:      chunk_id (str → UUID5 derived from chunk_id for Qdrant compat)
-vector:  embedding (list[float], length = EMBEDDING_DIM)
+vector:  {"":     embedding (list[float], length = EMBEDDING_DIM) — the unnamed default
+          "bm25": BM25 sparse vector of payload.text (indices + values) — hybrid search}
 payload: {
     "chunk_id":      str,
     "article_url":   str,
@@ -120,7 +121,14 @@ DISTANCE_METRIC   = Distance.COSINE         # cosine for normalised vectors
 ON_DISK_PAYLOAD   = True                    # persist payload to disk
 HNSW_M            = 16                      # HNSW graph connectivity
 HNSW_EF_CONSTRUCT = 100                     # build-time accuracy
+SPARSE_VECTOR_NAME = "bm25"                 # SparseVectorParams(modifier=Modifier.IDF)
 ```
+
+**The BM25 sparse vector.** `ingestion/sparse_encoder.py` (fastembed `Qdrant/bm25`: stopwords
+removed, stemmed, terms hashed to ids) encodes each chunk's text. Documents carry BM25's
+term-frequency part, with `k`, `b` and `BM25_AVG_LEN` (config) baked in. Qdrant applies the
+IDF at query time, so it always reflects the current corpus. The dense vector stays the
+unnamed default, so dense `search` is identical with or without it.
 
 **Why HNSW?** Qdrant's default index. At the expected scale (< 100k chunks), HNSW gives sub-millisecond search with excellent recall. No tuning needed until > 1M points.
 
@@ -142,6 +150,22 @@ point (Qdrant has no first-class collection metadata), and every later `upsert` 
 `embedded_chunks[0].model_name` against it and raises `ModelMismatchError` on a mismatch.
 `recorded_model() -> str | None` exposes it so `query/retriever.py` can guard query-time
 embedding against the same value. The sentinel is filtered out of `count()` and `search()`.
+
+### Adding BM25 to an existing collection (`--add-sparse`)
+```
+add_sparse_vectors():
+  scroll every point (dense vector, payload, id), encode payload.text as BM25
+  no bm25 config → delete the collection, recreate it with dense + bm25 config,
+                   re-upsert every point: same id, dense vector and payload, plus bm25
+  bm25 config    → update_vectors: rewrite only the bm25 vectors (e.g. new BM25_AVG_LEN)
+  verify the point count is unchanged; return {migrated, points, sparse_vectors_written,
+                                               measured_avg_len}
+```
+Embedded Qdrant can't add a sparse vector to an existing collection, so the first run
+recreates it. `monthly_job.py --add-sparse` copies `QDRANT_PATH` to
+`<dir>.pre-sparse-<ts>` first, because a crash between the delete and the re-upsert would lose
+the index. Nothing is re-scraped or re-embedded. `upsert` writes the bm25 vector only when
+`has_sparse()`, so a pre-hybrid collection keeps working dense-only until it's migrated.
 
 ### Collection drop (`--reset` only)
 ```
@@ -215,6 +239,7 @@ DEFAULT_TOP_K      = 6
 
 ## Key Dependencies
 - `qdrant-client` — official Python client (sync + async)
+- `fastembed` — BM25 encoder for the `bm25` sparse vector (via `ingestion/sparse_encoder.py`)
 - `uuid` — UUID5 generation for point IDs (stdlib)
 
 ---
@@ -232,6 +257,17 @@ class VectorStore:
         top_k: int = DEFAULT_TOP_K,
         filters: dict | None = None,
     ) -> list[SearchResult]: ...
+
+    def search_sparse(
+        self, query_text: str, top_k: int = 6, filters: dict | None = None
+    ) -> list[SearchResult]: ...   # BM25; .score is a BM25 score — fuse by rank only
+
+    def score_by_ids(
+        self, query_vector: list[float], chunk_ids: list[str]
+    ) -> dict[str, float]: ...     # cosine for just these chunks, by chunk_id
+
+    def has_sparse(self) -> bool: ...          # collection has the bm25 sparse vector
+    def add_sparse_vectors(self) -> dict: ...  # --add-sparse only; see above
 
     def delete_by_url(self, article_url: str) -> int: ...
 

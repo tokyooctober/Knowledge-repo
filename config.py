@@ -122,7 +122,21 @@ DEFAULT_TOP_K = 6
 MAX_CHUNKS_PER_ARTICLE = 3
 MIN_SCORE_THRESHOLD = 0.35
 ENABLE_QUERY_REWRITING = False
-ENABLE_HYBRID_SEARCH = False
+# Hybrid: a BM25 sparse search runs beside the dense one and RRF fuses the two ranked lists.
+# Needs the `bm25` sparse vector in the collection (`monthly_job.py --add-sparse`); without it
+# retrieval warns and stays dense-only. Env-overridable so eval arms switch without edits.
+ENABLE_HYBRID_SEARCH = os.environ.get("ENABLE_HYBRID_SEARCH", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
+HYBRID_FETCH = 48  # candidates fetched from EACH of the dense and BM25 lists — the same with
+                   # or without the reranker, so the reranker is the only difference between arms
+RRF_K = 60         # reciprocal rank fusion: score = sum 1/(RRF_K + rank). 60 is the standard
+                   # value; it flattens rank differences so neither list dominates
+BM25_AVG_LEN = 184.5  # average chunk length in BM25 tokens (stemmed, stopwords removed), for
+                      # length normalisation. Measured over the 6,764-chunk corpus on 2026-09-26;
+                      # --add-sparse re-measures and prints it. fastembed's 256 default is 39% high
 # Off: measured across all 50 eval questions, decomposition changed the result on ZERO of
 # them while costing ~2.2 s/query, because _merge_by_holistic_rank appends subquery finds
 # behind a holistic list that already fills RERANK_POOL — so they are sliced off before the
@@ -139,7 +153,7 @@ HOLISTIC_OVERFETCH = 8      # x top_k for the original query's own search when d
 # Cross-encoder reranking — scores (query, chunk) jointly instead of comparing independently
 # computed embeddings. Measured +19% relative recall@k with no single-source regression,
 # at ~38 ms per candidate.
-ENABLE_RERANK = True
+ENABLE_RERANK = os.environ.get("ENABLE_RERANK", "true").strip().lower() in ("1", "true", "yes")
 RERANK_MODEL = "BAAI/bge-reranker-v2-m3"  # 8192-token context; 512-limit rerankers truncate
                                           # ~69% of (query, chunk) pairs and lose recall
 RERANK_POOL = 48            # candidates scored per query — past this, latency outruns the gain

@@ -251,3 +251,92 @@ def test_stats_reports_points_and_model(store):
     assert s["points"] == 1
     assert s["model_name"] == "bge-large"
     assert s["dim"] == _DIM
+
+
+# ── BM25 sparse vectors (hybrid search) ─────────────────────────────────────
+
+
+def _make_pre_hybrid(store) -> None:
+    """Recreate the collection the way it was before hybrid search: dense only."""
+    from qdrant_client import models
+
+    store.client.delete_collection(vs_module.COLLECTION_NAME)
+    store.client.create_collection(
+        vs_module.COLLECTION_NAME,
+        vectors_config=models.VectorParams(size=_DIM, distance=models.Distance.COSINE),
+    )
+
+
+def _seed_three(store) -> None:
+    rows = [
+        ("gold", "Sold Kirkland Lake Gold shares", [1, 0, 0, 0]),
+        ("port", "No current portfolio changes", [0.9, 0.1, 0, 0]),
+        ("btc", "Bitcoin on-chain indicators", [0, 0, 1, 0]),
+    ]
+    store.upsert([_emb(_chunk(c, url=f"https://e.com/{c}", text=t), v) for c, t, v in rows])
+
+
+def test_new_collection_has_the_bm25_sparse_vector(store):
+    assert store.has_sparse()
+
+
+def test_search_sparse_ranks_the_exact_term_chunk_first(store):
+    _seed_three(store)
+    results = store.search_sparse("Kirkland Lake Gold", top_k=3)
+    assert results[0].chunk_id == "gold"
+    assert all(r.chunk_id for r in results)  # the sentinel (no chunk_id) never appears
+
+
+def test_search_sparse_applies_filters(store):
+    _seed_three(store)
+    chart = _chunk("gold2", url="https://e.com/g2", ctype="image", text="Kirkland Lake Gold chart")
+    store.upsert([_emb(chart, [1, 0, 0, 0])])
+    results = store.search_sparse("Kirkland Lake Gold", top_k=5, filters={"content_type": "image"})
+    assert [r.chunk_id for r in results] == ["gold2"]
+
+
+def test_score_by_ids_returns_cosine_for_just_those_chunks(store):
+    _seed_three(store)
+    scores = store.score_by_ids([1, 0, 0, 0], ["gold", "btc"])
+    assert set(scores) == {"gold", "btc"}
+    assert scores["gold"] == pytest.approx(1.0)
+    assert scores["btc"] == pytest.approx(0.0, abs=1e-6)
+    assert store.score_by_ids([1, 0, 0, 0], []) == {}
+
+
+def test_upsert_into_a_pre_hybrid_collection_stays_dense_only(store):
+    _make_pre_hybrid(store)
+    store.upsert([_emb(_chunk("a0"), [1, 0, 0, 0])])
+    assert not store.has_sparse()
+    assert store.count() == 1
+
+
+def test_add_sparse_migrates_a_pre_hybrid_collection_without_changing_dense_search(store):
+    _make_pre_hybrid(store)
+    _seed_three(store)
+    before = [(r.chunk_id, r.score, r.text) for r in store.search([1, 0, 0, 0], top_k=3)]
+
+    result = store.add_sparse_vectors()
+
+    assert result["migrated"] is True
+    assert result["sparse_vectors_written"] == 3
+    assert result["points"] == 4  # three chunks + the model sentinel
+    assert store.has_sparse()
+    assert store.count() == 3
+    assert store.recorded_model() == "bge-large"
+    after = [(r.chunk_id, r.score, r.text) for r in store.search([1, 0, 0, 0], top_k=3)]
+    assert after == before
+    assert store.search_sparse("Kirkland Lake Gold", top_k=1)[0].chunk_id == "gold"
+
+
+def test_add_sparse_is_idempotent(store):
+    _seed_three(store)
+    result = store.add_sparse_vectors()
+    assert result["migrated"] is False
+    assert store.count() == 3
+    assert store.search_sparse("Bitcoin", top_k=1)[0].chunk_id == "btc"
+
+
+def test_add_sparse_reports_the_measured_average_length(store):
+    _seed_three(store)  # 5, 4 and 4 terms under the fake encoder ("on-chain" is two)
+    assert store.add_sparse_vectors()["measured_avg_len"] == 4.3
