@@ -341,29 +341,29 @@
 
   <header class="masthead">
     <p class="eyebrow">Knowledge-repo · RAG evaluation</p>
-    <h1>Fourteen days to a re-baselined retriever</h1>
-    <p class="lede">A decision log of the work between two full 50-question eval runs — what was hypothesised, what was measured, what got thrown away, and the one intervention that survived every guard.</p>
+    <h1>Twenty-two days to a re-baselined retriever</h1>
+    <p class="lede">A decision log of the work across three full 50-question eval runs: what was hypothesised, what was measured, what got thrown away, and the two interventions that survived every guard.</p>
     <div class="facts">
-      <span><b>2026-09-04 → 09-18</b> elapsed</span>
+      <span><b>2026-09-04 → 09-26</b> elapsed</span>
       <span><b>50</b> frozen questions</span>
       <span>judge <b>qwen2.5:14b-instruct</b></span>
       <span><b>3</b> hypotheses falsified</span>
-      <span><b>1</b> shipped</span>
+      <span><b>2</b> shipped</span>
     </div>
   </header>
 
   <section class="headline-band" style="margin-top:28px" aria-label="Final outcome">
     <div>
-      <span class="figure up">+21%</span>
-      <span class="figure-label">recall@k<br>0.637 → 0.773</span>
+      <span class="figure up">+35%</span>
+      <span class="figure-label">recall@k, reranking then BM25 hybrid<br>0.637 → 0.773 → 0.860</span>
     </div>
     <div>
-      <span class="figure up">+44%</span>
-      <span class="figure-label">mrr — the largest move, and the one nobody simulated<br>0.591 → 0.852</span>
+      <span class="figure up">+52%</span>
+      <span class="figure-label">mrr, most of it from reranking<br>0.591 → 0.852 → 0.896</span>
     </div>
     <div>
-      <span class="figure flat">±0.03</span>
-      <span class="figure-label">all three answer-quality metrics — flat, inside the pre-registered threshold</span>
+      <span class="figure flat">+0.04</span>
+      <span class="figure-label">answer_correctness, 0.625 → 0.661: still inside the pre-registered ±0.05</span>
     </div>
   </section>
 
@@ -945,6 +945,156 @@
     <p class="phase-intro" style="margin-top:20px">One number nobody predicted: <span class="mono">mrr</span> moved further than recall did. The reranker isn't only finding more gold articles — it's putting them near the top. Further retrieval work (the remaining 0.10 oracle gap, a recency prior, chunking) now has clearly diminishing returns; the constraint is the answerer, or the answer prompt.</p>
   </section>
 
+  <!-- ============ PHASE 7 ============ -->
+  <section class="phase">
+    <div class="phase-head">
+      <span class="phase-num">PHASE 07</span>
+      <span class="phase-dates">2026-09-25 → 09-26</span>
+      <h2>BM25 hybrid search</h2>
+    </div>
+    <p class="phase-intro">The q004 case from Phase 3, again: "Kirkland Lake Gold" is the only term that separates the gold chunk from five other "portfolio changes" chunks, all within 0.02 cosine. Dense search put it 5th. BM25 ranks exact rare terms by design, and put it 1st.</p>
+
+    <div class="spine">
+
+      <article class="entry" data-verdict="shipped">
+        <div class="entry-top">
+          <span class="stamp">Design</span>
+          <h3>A sparse vector beside the dense one, fused by rank</h3>
+          <span class="chip shipped">built</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">Index</span><span class="hx-val">Each Qdrant point gets a <code>bm25</code> sparse vector built from the chunk text already in its payload, with IDF applied by Qdrant. No re-scraping, no re-embedding. Embedded Qdrant can't add a sparse vector to an existing collection, so <code>monthly_job.py --add-sparse</code> recreates it after copying the store aside.</span></div>
+          <div class="hx-row"><span class="hx-key">Query</span><span class="hx-val">Dense top 48 and BM25 top 48 are fused by RRF (<code>RRF_K = 60</code>). With the reranker, RRF's best 48 become the cross-encoder's pool. Scores are never compared across the two lists, only ranks, which is the rule Phase 3 learned from <code>_fuse()</code>.</span></div>
+          <div class="hx-row result"><span class="hx-key">Check</span><span class="hx-val">After the migration, all 6,764 chunks carried a BM25 vector, and a fixed dense query returned the same ids and scores as before (q004 top 3: 0.6905 / 0.6856 / 0.6824). The dense index was untouched.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="confirmed">
+        <div class="entry-top">
+          <span class="stamp">Gates · n=6, n=22</span>
+          <h3>Two smoke rounds before spending three hours on scoring</h3>
+          <span class="chip confirmed">passed</span>
+        </div>
+        <div class="tablewrap">
+          <table>
+            <caption>recall@k · the bar, set in advance, was "at least even"</caption>
+            <thead><tr><th>round</th><th>no rerank vs dense only</th><th>rerank vs 09-18 dense + rerank</th></tr></thead>
+            <tbody>
+              <tr><td>6 questions (5 with &gt;2 reference chunks, plus q004)</td><td>0.556 → 0.611</td><td>0.611 → 0.833</td></tr>
+              <tr><td>22 multi-source questions</td><td>0.447 → 0.644</td><td>0.621 → 0.773</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="confirmed">
+        <div class="entry-top">
+          <span class="stamp">n=50 · both arms</span>
+          <h3>Better than 09-18 on every exact metric, with the reranker</h3>
+          <span class="chip confirmed">shipped · on by default</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row result"><span class="hx-key">Guard</span><span class="hx-val">No single-source question got worse: hit_rate and recall@k 0.893 → 0.929 on the 28. Of all 50, 8 improved, 1 slipped (q020, gold rank 4 → 5) and 41 did not change.</span></div>
+          <div class="hx-row"><span class="hx-key">Where</span><span class="hx-val">Mostly multi-source. Two-article questions that find both articles went from 8 of 21 to 12 of 21.</span></div>
+        </div>
+      </article>
+
+      <article class="entry" data-verdict="corrected">
+        <div class="entry-top">
+          <span class="stamp">Without the reranker</span>
+          <h3>RRF alone reorders, and never adds</h3>
+          <span class="chip corrected">mechanism found</span>
+        </div>
+        <div class="hx">
+          <div class="hx-row"><span class="hx-key">Result</span><span class="hx-val">The no-rerank arm matched 09-18 on recall@k (0.783) but ranked worse (mrr 0.731), and no chunk that only BM25 found ever reached its top 6.</span></div>
+          <div class="hx-row result"><span class="hx-key">Why</span><span class="hx-val">With 48 per list, the weakest chunk in both lists scores 2/(60+48) = 0.0185, and the strongest chunk in one list scores 1/(60+1) = 0.0164. For any <code>RRF_K</code> above 46, overlap always wins, so the top 6 came from the overlap every time. With the reranker, 11–21 BM25-only chunks per question entered the pool, and the correct ones in q022, q034, q038 and q055 made the top 6.</span></div>
+        </div>
+      </article>
+
+    </div>
+
+    <div class="chart" role="img" aria-label="Nine metrics compared between the 2026-09-18 reranked run and the 2026-09-26 hybrid plus reranker run. All six retrieval metrics improved; the answering metrics rose by less than 0.05 or stayed flat.">
+      <p class="group-label">Retrieval · all six up</p>
+
+      <div class="bar-row">
+        <div class="bar-name">context_precision<span>+0.029</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:94.5%"></i><b>0.945</b></div>
+          <div class="bar now"><i style="width:97.4%"></i><b>0.974</b></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">context_recall<span>+0.079</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:80.2%"></i><b>0.802</b></div>
+          <div class="bar now"><i style="width:88.1%"></i><b>0.881</b></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">hit_rate@k<span>+0.060</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:88.0%"></i><b>0.880</b></div>
+          <div class="bar now"><i style="width:94.0%"></i><b>0.940</b></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">mrr<span>+0.044</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:85.2%"></i><b>0.852</b></div>
+          <div class="bar now"><i style="width:89.6%"></i><b>0.896</b></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">recall@k<span>+0.087</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:77.3%"></i><b>0.773</b></div>
+          <div class="bar now"><i style="width:86.0%"></i><b>0.860</b></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">precision@k<span>+0.037</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:23.8%"></i><b>0.238</b></div>
+          <div class="bar now"><i style="width:27.5%"></i><b>0.275</b></div>
+        </div>
+      </div>
+
+      <p class="group-label">Answering · up, but under ±0.05</p>
+
+      <div class="bar-row">
+        <div class="bar-name">faithfulness<span>+0.000</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:90.6%"></i><b>0.906</b></div>
+          <div class="bar now"><i style="width:90.6%"></i><b>0.906</b></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">answer_relevancy<span>+0.034</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:65.8%"></i><b>0.658</b></div>
+          <div class="bar now"><i style="width:69.2%"></i><b>0.692</b></div>
+        </div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-name">answer_correctness<span>+0.039</span></div>
+        <div class="track">
+          <div class="bar"><i style="width:62.2%"></i><b>0.622</b></div>
+          <div class="bar now"><i style="width:66.1%"></i><b>0.661</b></div>
+        </div>
+      </div>
+
+      <div class="legend">
+        <span><i></i> 2026-09-18 · reranked</span>
+        <span><i class="now"></i> 2026-09-26 · BM25 hybrid + reranked</span>
+        <span class="dim">scale 0 → 1.0 · same 50 questions, same judge, 2 passes</span>
+      </div>
+    </div>
+
+    <div class="pull" style="margin-top:26px">
+      <strong>Phase 6's prediction was half right.</strong> It said further retrieval work had clearly diminishing returns. BM25 then produced the second-largest retrieval gain of the log: recall@k +0.087, context_recall +0.079. The other half held. The answering metrics rose further than ever before, but neither answer_relevancy (+0.034) nor answer_correctness (+0.039) reached the ±0.05 threshold, so the answerer is still the constraint.
+    </div>
+  </section>
+
   <!-- ============ CLOSING ============ -->
   <section class="closing">
     <span class="eyebrow">What the log is really about</span>
@@ -957,6 +1107,8 @@
       <div class="commit"><span class="sha">cf093cb</span><span>disable decomposition — it changed nothing on all 50 eval questions</span></div>
       <div class="commit"><span class="sha">f742484</span><span>load models at startup so the first question isn't 20 s slower than the rest</span></div>
       <div class="commit"><span class="sha">43981af</span><span>re-baseline METRICS.md on the post-reranking run</span></div>
+      <div class="commit"><span class="sha">ccf2ec9</span><span>BM25 hybrid search: Qdrant sparse vectors fused with dense by RRF</span></div>
+      <div class="commit"><span class="sha">6c595fe</span><span>turn hybrid search on by default, and re-baseline METRICS.md on it</span></div>
     </div>
 
     <footer>Knowledge-repo · reconstructed from the session transcript, git history and the eval logs. Retrieval metrics are exact URL-overlap measures with no judge involved; the five RAGAS metrics were scored by qwen2.5:14b-instruct over two passes.</footer>
