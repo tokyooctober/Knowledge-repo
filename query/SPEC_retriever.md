@@ -236,12 +236,12 @@ implausible.
 
 ---
 
-## Hybrid Search (optional enhancement)
+## Hybrid Search (on by default)
 Dense search ranks chunks by what they are *about*. It struggles when one rare exact term is
 the whole question. In q004, "Kirkland Lake Gold" is the only word that separates the right
 chunk from five other "portfolio changes" chunks, all within 0.02 cosine. BM25 matches exact
-terms, so hybrid search runs both and fuses them. Off by default: set
-`ENABLE_HYBRID_SEARCH=true` (env or `.env`).
+terms, so hybrid search runs both and fuses them. On by default; set
+`ENABLE_HYBRID_SEARCH=false` (env or `.env`) for dense only.
 
 ```
 dense  = vector_store.search(query_vector, top_k=HYBRID_FETCH)       # cosine
@@ -271,6 +271,14 @@ otherwise:     fused as is                            # RRF order is the final o
   place of cosine and would break both rules above.
 - Not combined with decomposition. If both are on, the fused list takes the holistic list's
   place and subquery finds append behind it, as before.
+- **Measured (2026-09-26, all 50 questions).** With the reranker, hybrid beat dense + reranker
+  on every exact metric: recall@k 0.773 → 0.860, mrr 0.852 → 0.896, and no single-source
+  question got worse. Without the reranker, RRF alone ranks worse than dense + reranker (mrr
+  0.731). See `eval/TIMELINE.md`, Phase 7.
+- **Without the reranker, BM25 only reorders.** With `HYBRID_FETCH = 48`, any `RRF_K` above 46
+  makes every chunk in both lists outscore every chunk in one (`2/(k+48) > 1/(k+1)`). At 60
+  the top 6 always come from the overlap, so a chunk only BM25 found never reaches the
+  answerer without the cross-encoder. Lower `RRF_K` or `HYBRID_FETCH` if that arm matters.
 
 ---
 
@@ -280,7 +288,7 @@ DEFAULT_TOP_K              = 6
 MAX_CHUNKS_PER_ARTICLE     = 3       # max results from a single article
 MIN_SCORE_THRESHOLD        = 0.35    # below this = not relevant
 ENABLE_QUERY_REWRITING     = False
-ENABLE_HYBRID_SEARCH       = False   # env-overridable; see Hybrid Search
+ENABLE_HYBRID_SEARCH       = True    # env-overridable; see Hybrid Search
 HYBRID_FETCH               = 48      # candidates from EACH of dense and BM25
 RRF_K                      = 60      # reciprocal rank fusion constant
 ENABLE_QUERY_DECOMPOSITION = False   # see "Currently OFF" note above

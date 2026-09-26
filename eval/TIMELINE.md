@@ -1,7 +1,8 @@
-# Retrieval investigation timeline — 2026-09-04 → 2026-09-18
+# Retrieval investigation timeline — 2026-09-04 → 2026-09-26
 
-What was hypothesised, what was measured, what got thrown away, and the one change that
-survived every guard — between the `20260907T030102Z` baseline and the `20260918` re-baseline.
+What was hypothesised, what was measured, what got thrown away, and the two changes that
+survived every guard: cross-encoder reranking, between the `20260907T030102Z` baseline and the
+`20260918` re-baseline, then BM25 hybrid search (Phase 7, `20260926`).
 
 A visual version of this document is published as an artifact:
 <https://claude.ai/artifact/RX4wBShbmT1mcGaF5YP3yH> (private — access is per-person).
@@ -14,6 +15,9 @@ involved and reproduce to four decimals across runs; the five RAGAS metrics were
 
 **Outcome:** recall@k +21%, mrr +44%, all three answering metrics flat.
 The bottleneck moved from retrieval to generation.
+
+**Update, 09-26 (Phase 7):** BM25 hybrid search on top of reranking added recall@k 0.773 → 0.860
+with no single-source regression. The answering metrics rose but stayed under ±0.05.
 
 ---
 
@@ -472,6 +476,69 @@ more gold articles, it's putting them near the top.
 
 ---
 
+## Phase 7 — BM25 hybrid search (09-25 → 09-26)
+
+The case that started it was q004: "Kirkland Lake Gold" is the only term separating the gold
+chunk from five other "portfolio changes" chunks, all within 0.02 cosine, and dense search put it
+5th. BM25 ranks exact rare terms by design, and ranked that chunk 1st.
+
+**Design.** BM25 lives in Qdrant as a native sparse vector (`bm25`, IDF applied by Qdrant), built
+from the chunk text already in each point's payload: no re-scraping, no re-embedding. Embedded
+Qdrant can't add a sparse vector to an existing collection, so `monthly_job.py --add-sparse`
+recreates it, after copying the store aside. Dense top 48 and BM25 top 48 are fused client-side by
+RRF (`RRF_K = 60`). `.score` stays cosine, so `MIN_SCORE_THRESHOLD` and logged scores keep their
+meaning. With the reranker, RRF's best 48 are the cross-encoder's pool.
+
+**Migration check.** After `--add-sparse`, 6,764 chunks carried a BM25 vector, and a fixed dense
+query returned the same ids and scores as before (q004 top 3: 0.6905 / 0.6856 / 0.6824), so the
+dense index was untouched.
+
+**Gates before the full run**, each arm with and without the reranker:
+
+| round | questions | no rerank vs dense only | rerank vs 09-18 dense + rerank |
+|---|---|---|---|
+| smoke 1 | 6 (5 with >2 reference chunks, plus q004) | recall@k 0.556 → 0.611 | recall@k 0.611 → 0.833 |
+| smoke 2 | 22 multi-source | recall@k 0.447 → 0.644 | recall@k 0.621 → 0.773 |
+
+Both arms were at least even on recall@k, the bar set in advance, so the full runs went ahead.
+
+**Full run, all 50 questions** (same judge, 2 passes):
+
+| metric | 09-18 dense + rerank | hybrid, no rerank | hybrid + rerank | change |
+|---|---|---|---|---|
+| context_precision | 0.945 | 0.922 | **0.974** | +0.029 |
+| context_recall | 0.802 | 0.790 | **0.881** | +0.079 |
+| hit_rate@k | 0.880 | 0.880 | **0.940** | +0.060 |
+| mrr | 0.852 | 0.731 | **0.896** | +0.044 |
+| recall@k | 0.773 | 0.783 | **0.860** | +0.087 |
+| precision@k | 0.238 | 0.229 | **0.275** | +0.037 |
+| faithfulness | 0.906 | 0.897 | **0.906** | +0.000 |
+| answer_relevancy | 0.658 | 0.684 | **0.692** | +0.034 |
+| answer_correctness | 0.622 | 0.660 | **0.661** | +0.039 |
+
+- **Single-source guard: no regression.** On the 28 single-source questions, hybrid + rerank went
+  0.893 → 0.929 on hit_rate and recall@k. Of all 50, 8 questions improved, 1 slipped (q020, gold
+  chunk rank 4 → 5), 41 did not change.
+- **Most of the gain is multi-source.** Two-article questions that found both articles went from
+  8 of 21 to 12 of 21.
+- **Without the reranker, BM25 only reorders.** With 48 per list, any `RRF_K` above 46 makes every
+  chunk found by both searches outrank every chunk found by one (`2/(k+48) > 1/(k+1)`). The top 6
+  therefore always came from the overlap, and no BM25-only chunk reached the answerer in that
+  arm. With the reranker, 11–21 BM25-only chunks per question entered its pool, and the correct
+  ones in q022, q034, q038 and q055 made the top 6.
+- **Answering: up, but under the threshold.** answer_correctness +0.039 and answer_relevancy
+  +0.034 are the largest answering moves so far, but neither reaches ±0.05.
+
+> **Phase 6's prediction was half right.** It said further retrieval work had "clearly diminishing
+> returns". BM25 then produced the second-largest retrieval gain of the investigation (recall@k
+> +0.087, context_recall +0.079). What held is the other half: the answering metrics still did not
+> clear the threshold, so the answerer remains the constraint.
+
+→ `ccf2ec9` added hybrid search; the next commit turned it on by default and re-baselined
+`METRICS.md` on the hybrid + rerank run.
+
+---
+
 ## The methodological lesson
 
 **Measuring only where an intervention should help is how you get a false positive.** It happened
@@ -499,3 +566,5 @@ The pool-depth bug had to be found by reading code.
 | `cf093cb` | disable decomposition — it changed nothing on all 50 eval questions |
 | `f742484` | load models at startup so the first question isn't 20 s slower than the rest |
 | `43981af` | re-baseline `METRICS.md` on the post-reranking run |
+| `0b66b80` | add this timeline, 09-04 to 09-18 |
+| `ccf2ec9` | BM25 hybrid search: Qdrant sparse vectors fused with dense by RRF |

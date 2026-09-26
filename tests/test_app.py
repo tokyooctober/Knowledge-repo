@@ -233,6 +233,7 @@ def test_warm_models_loads_embedder_store_and_reranker(monkeypatch):
     pays none, which reads as the app being slow rather than as a one-time cost."""
     called = []
     monkeypatch.setattr("config.ENABLE_RERANK", True)
+    monkeypatch.setattr("config.ENABLE_HYBRID_SEARCH", False)
     monkeypatch.setattr("ingestion.embedder.embed_query", lambda q: called.append("embed") or [0.1])
     monkeypatch.setattr(
         "query.retriever._get_store",
@@ -242,6 +243,23 @@ def test_warm_models_loads_embedder_store_and_reranker(monkeypatch):
     timings = app.warm_models()
     assert "embed" in called and "search" in called and "rerank" in called
     assert set(timings) == {"embedder", "vector_store", "reranker"}
+
+
+def test_warm_models_loads_the_bm25_encoder_when_hybrid(monkeypatch):
+    called = []
+    monkeypatch.setattr("config.ENABLE_RERANK", False)
+    monkeypatch.setattr("config.ENABLE_HYBRID_SEARCH", True)
+    monkeypatch.setattr("ingestion.embedder.embed_query", lambda q: [0.1])
+    monkeypatch.setattr(
+        "query.retriever._get_store",
+        lambda: type("S", (), {"search": lambda self, **kw: []})(),
+    )
+    monkeypatch.setattr(
+        "ingestion.sparse_encoder.encode_query", lambda q: called.append("bm25") or None
+    )
+    timings = app.warm_models()
+    assert called == ["bm25"]
+    assert set(timings) == {"embedder", "vector_store", "bm25_encoder"}
 
 
 def test_warm_models_skips_the_reranker_when_disabled(monkeypatch):

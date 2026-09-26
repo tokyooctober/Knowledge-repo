@@ -852,7 +852,7 @@ DEFAULT_TOP_K          = 6
 MAX_CHUNKS_PER_ARTICLE = 3
 MIN_SCORE_THRESHOLD    = 0.35
 ENABLE_QUERY_REWRITING = False
-ENABLE_HYBRID_SEARCH   = False
+ENABLE_HYBRID_SEARCH   = True
 
 # ── Answer generation ────────────────────────────────────────────────────────
 MAX_OUTPUT_TOKENS      = 1024

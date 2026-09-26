@@ -125,7 +125,9 @@ ENABLE_QUERY_REWRITING = False
 # Hybrid: a BM25 sparse search runs beside the dense one and RRF fuses the two ranked lists.
 # Needs the `bm25` sparse vector in the collection (`monthly_job.py --add-sparse`); without it
 # retrieval warns and stays dense-only. Env-overridable so eval arms switch without edits.
-ENABLE_HYBRID_SEARCH = os.environ.get("ENABLE_HYBRID_SEARCH", "").strip().lower() in (
+# On by default: with the reranker, recall@k 0.773 → 0.860 on the 50-question eval, and no
+# single-source question got worse (eval/TIMELINE.md, Phase 7).
+ENABLE_HYBRID_SEARCH = os.environ.get("ENABLE_HYBRID_SEARCH", "true").strip().lower() in (
     "1",
     "true",
     "yes",
